@@ -1,0 +1,58 @@
+---
+title: "UA ALM 202602"
+format:
+  html:
+    toc: true
+    number-sections: true
+    colorlinks: true
+    self-contained: true
+  pdf:
+    toc: true
+    number-sections: true
+    colorlinks: true
+    geometry:
+      - left=0.5in
+      - right=0.5in
+      - top=0.5in
+      - bottom=0.5in
+    papersize: letter
+    fontsize: 11pt
+---
+
+```{python imports}
+from datetime import datetime, date
+import polars as pl
+import yfinance as yf
+from great_tables import GT, style, loc
+import plotly.express as px
+import plotly.graph_objects as go
+import plotly.io as pio
+import os
+
+from pathlib import Path
+import sys
+
+sys.path.insert(
+    0, str((Path.cwd().parent) / "src")
+)  # establishes financial_tools in the script
+from financial_tools import calculations, read, utils
+
+pdf_bool = os.environ.get("QUARTO_PROJECT_OUTPUT_FORMAT") == "pdf"
+if pdf_bool:
+    pio.renderers.default = "png"  # or "svg"
+else:
+    pio.renderers.default = "notebook_connected+vscode"
+
+today = date.today()
+
+print(f"DATE: {today}")
+print("AUTHOR: Brennen L. Slaney, FSA, Notary Public (GitHub: @realslimslaney)")
+```
+
+
+## ALM
+
+This chapter describes how to use ALM (Application Lifecycle Management) features in Quarto. ALM features help you manage the development, deployment, and maintenance of your Quarto projects effectively.
+
+```{python}
+```
