@@ -31,6 +31,14 @@ uv run pytest
 
 Configured via `[tool.ruff]` in `pyproject.toml`. Uses [ruff](https://docs.astral.sh/ruff/) with the following rule sets: pycodestyle, pyflakes, isort, pyupgrade, bugbear, and simplify.
 
+Pre-commit hooks run ruff automatically on each commit. Install them once with:
+
+```bash
+uv run pre-commit install
+```
+
+To run manually:
+
 ```bash
 uv run ruff check .       # lint
 uv run ruff format .      # format

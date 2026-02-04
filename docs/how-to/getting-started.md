@@ -23,7 +23,13 @@
    uv sync
    ```
 
-3. Verify the installation:
+3. Install pre-commit hooks:
+
+   ```bash
+   uv run pre-commit install
+   ```
+
+4. Verify the installation:
 
    ```bash
    uv run pytest
