@@ -1,0 +1,20 @@
+project:
+  type: default  # This is the default; tells Quarto it's a standalone doc
+
+format:
+  html:
+    toc: true         # Table of contents
+    embed-resources: true
+    code-fold: true   # Collapse code blocks
+    self-contained: true  # Good for sharing offline
+    fig-align: center
+    fig-width: 6
+    fig-height: 4
+  pdf:
+    execute:
+      freeze: auto
+
+execute:
+  echo: false
+  warning: false
+  python: ".venv/Scripts/python.exe"
