@@ -32,10 +32,8 @@ import os
 from pathlib import Path
 import sys
 
-sys.path.insert(
-    0, str((Path.cwd().parent) / "src")
-)  # establishes financial_tools in the script
-from financial_tools import calculations, read, utils
+sys.path.insert(0, str((Path.cwd().parent) / "src"))
+from alm import core, read, utils
 
 pdf_bool = os.environ.get("QUARTO_PROJECT_OUTPUT_FORMAT") == "pdf"
 if pdf_bool:
