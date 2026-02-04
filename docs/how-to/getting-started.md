@@ -29,7 +29,18 @@
    uv run pre-commit install
    ```
 
-4. Verify the installation:
+4. Set up your API keys:
+
+   Copy the example environment file and add your keys:
+
+   ```bash
+   cp .env.example .env
+   ```
+
+   Open `.env` and replace `your_key_here` with your
+   [FRED API key](https://fred.stlouisfed.org/docs/api/api_key.html) (free).
+
+5. Verify the installation:
 
    ```bash
    uv run pytest

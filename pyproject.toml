@@ -1,6 +1,6 @@
 [project]
 name = "alm"
-version = "0.1.0"
+version = "0.1.1"
 description = "Educational toolkit demonstrating Asset-Liability Management (ALM) concepts for actuarial science students"
 readme = "README.md"
 authors = [
@@ -8,9 +8,12 @@ authors = [
 ]
 requires-python = ">=3.12"
 dependencies = [
+    "fredapi>=0.5.2",
     "great-tables>=0.20.0",
+    "jupyter>=1.1.1",
     "plotly>=6.5.2",
     "polars>=1.37.1",
+    "python-dotenv>=1.2.1",
     "simfin>=1.0.1",
     "yfinance>=1.1.0",
 ]
