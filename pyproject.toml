@@ -1,0 +1,45 @@
+[project]
+name = "alm"
+version = "0.1.0"
+description = "Educational toolkit demonstrating Asset-Liability Management (ALM) concepts for actuarial science students"
+readme = "README.md"
+authors = [
+    { name = "Brennen Slaney", email = "bslaney7@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "great-tables>=0.20.0",
+    "plotly>=6.5.2",
+    "polars>=1.37.1",
+    "simfin>=1.0.1",
+    "yfinance>=1.1.0",
+]
+
+[dependency-groups]
+dev = [
+    "pre-commit>=4.0",
+    "pytest>=8.0",
+    "ruff>=0.9.0",
+]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 88
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "UP",  # pyupgrade
+    "B",   # flake8-bugbear
+    "SIM", # flake8-simplify
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["alm"]
+
+[build-system]
+requires = ["uv_build>=0.9.13,<0.10.0"]
+build-backend = "uv_build"
