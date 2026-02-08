@@ -1,0 +1,301 @@
+---
+title: "SPIA — Single Premium Immediate Annuity"
+execute:
+  echo: false
+  warning: false
+format:
+  html:
+    toc: true
+    embed-resources: true
+    code-fold: true
+    self-contained: true
+    html-math-method: webtex
+    fig-align: center
+    fig-width: 6
+    fig-height: 4
+  pdf:
+    toc: true
+    colorlinks: true
+    geometry:
+      - left=0.75in
+      - right=0.75in
+      - top=0.75in
+      - bottom=0.75in
+    papersize: letter
+    fontsize: 11pt
+---
+
+```{python}
+# | label: setup
+# | echo: false
+import sys
+from pathlib import Path
+
+import polars as pl
+import plotly.io as pio
+import os
+
+sys.path.insert(0, str((Path.cwd().parent.parent) / "src"))
+from alm.liability import SPIA, qx_from_table
+from alm.read import get_2012_iam_table
+from alm import plot
+
+from great_tables import GT, style, loc
+
+pdf_bool = os.environ.get("QUARTO_PROJECT_OUTPUT_FORMAT") == "pdf"
+if pdf_bool:
+    pio.renderers.default = "png"
+else:
+    pio.renderers.default = "notebook"
+
+BRAND = "#2563eb"
+DISCOUNT_RATE = 0.04
+
+
+def styled_gt(df, title=None):
+    gt = GT(df)
+    if title:
+        gt = gt.tab_header(title)
+    return gt.tab_options(
+        heading_background_color=BRAND,
+        column_labels_background_color="#dbeafe",
+        column_labels_font_weight="bold",
+    ).tab_style(
+        style=style.text(color="white", weight="bold"),
+        locations=loc.header(),
+    )
+
+
+mortality = get_2012_iam_table()
+```
+
+# Overview
+
+A **Single Premium Immediate Annuity (SPIA)** is a contract where the policyholder pays a single lump-sum premium and in return receives periodic income payments for life, starting immediately. An optional **certain period** guarantees payments for a fixed number of years regardless of survival.
+
+SPIAs are the bread-and-butter liability for retirement income. They expose the insurer to **longevity risk** (the annuitant lives longer than expected) and **interest rate risk** (the discount rate used to price the annuity changes after issue).
+
+**Who buys it:** Retirees converting savings into guaranteed income.
+
+**Insurer's risk:** Longevity + interest rate mismatch.
+
+---
+
+# Key Parameters
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `premium` | float | Single lump-sum payment at issue |
+| `annual_payout` | float | Total annual payout to the annuitant |
+| `qx` | list[float] | Annual mortality rates from current age |
+| `frequency` | int | Payouts per year (default 12 = monthly) |
+| `certain_period` | int | Guaranteed payment period in years (0 = life only) |
+| `age` | int \| None | Issue age (reference only) |
+
+**Code:** `SPIA` class in `src/alm/liability.py`
+
+---
+
+# Formulas
+
+## Actuarially Fair Premium
+
+The fair single premium equals the present value of all expected future payouts:
+
+$$
+\text{Premium} = \sum_{t=1}^{n} \frac{E[\text{Payout}_t]}{(1 + r/f)^t}
+$$
+
+where:
+
+| Symbol | Meaning |
+|--------|---------|
+| $E[\text{Payout}_t]$ | Expected payout at period $t$ (full payout during certain period, payout $\times$ survival probability after) |
+| $r$ | Annual discount rate |
+| $f$ | Payment frequency per year |
+| $n$ | Total number of periods ($= \text{years} \times f$) |
+
+## Expected Payout
+
+$$
+E[\text{Payout}_t] = \begin{cases}
+\text{pmt} & \text{if } t/f \leq \text{certain period} \\
+\text{pmt} \times {}_tp_x & \text{otherwise}
+\end{cases}
+$$
+
+where $\text{pmt} = \text{annual\_payout} / f$ and ${}_tp_x$ is the probability of surviving to time $t/f$.
+
+## Duration (Macaulay)
+
+$$
+D = \frac{1}{PV} \sum_{t=1}^{n} \frac{t}{f} \cdot \frac{E[\text{Payout}_t]}{(1 + r/f)^t}
+$$
+
+## Convexity
+
+$$
+C = \frac{1}{PV \cdot f^2} \sum_{t=1}^{n} \frac{t(t+1) \cdot E[\text{Payout}_t]}{(1 + r/f)^{t+2}}
+$$
+
+---
+
+# Example
+
+```{python}
+#| label: spia-example
+qx = qx_from_table(mortality, age=65, sex="female")
+
+# Create a SPIA with actuarially fair premium
+spia = SPIA.from_payout(
+    annual_payout=120_000,  # $10k/month
+    qx=qx,
+    discount_rate=DISCOUNT_RATE,
+    certain_period=10,       # 10-year guarantee
+    age=65,
+)
+
+summary = pl.DataFrame({
+    "metric": ["Annual Payout", "Fair Premium", "Certain Period", "Age", "Frequency"],
+    "value": [
+        f"${spia.annual_payout:,.0f}",
+        f"${spia.premium:,.0f}",
+        f"{spia.certain_period} years",
+        str(spia.age),
+        f"{spia.frequency}x/year (monthly)",
+    ],
+})
+styled_gt(summary, "SPIA — Example Policy")
+```
+
+---
+
+# Cashflow Profile
+
+```{python}
+#| label: spia-cashflows-table
+cf = spia.cashflows()
+styled_gt(
+    cf.head(24),
+    "Expected Cashflows (first 24 periods)"
+).fmt_currency(["payout", "expected_payout"], decimals=0).fmt_number("survival_prob", decimals=4)
+```
+
+```{python}
+#| label: spia-cashflow-chart
+# Aggregate to annual for visualization
+annual_cf = cf.group_by((pl.col("period") - 1) // spia.frequency).agg(
+    pl.col("year").max().alias("year"),
+    pl.col("expected_payout").sum().alias("expected_payout"),
+    pl.col("payout").sum().alias("nominal_payout"),
+).sort("year")
+
+fig = plot.line_chart(
+    annual_cf,
+    x="year",
+    y=["nominal_payout", "expected_payout"],
+    title="SPIA Annual Cashflows — Nominal vs Expected",
+    xlab="Year",
+    ylab="Annual Payout",
+    yformat="$",
+)
+fig.show()
+```
+
+The gap between nominal and expected payouts widens over time as mortality reduces the expected payment. During the 10-year certain period, both lines overlap because payments are guaranteed.
+
+---
+
+# Certain Period Comparison
+
+```{python}
+#| label: spia-certain-comparison
+# Compare SPIAs with different certain periods
+certain_periods = [0, 5, 10, 15, 20]
+comparison_rows = []
+for cp in certain_periods:
+    s = SPIA.from_payout(
+        annual_payout=120_000, qx=qx, discount_rate=DISCOUNT_RATE,
+        certain_period=cp, age=65,
+    )
+    comparison_rows.append({
+        "certain_period": f"{cp} years",
+        "premium": s.premium,
+        "pv": s.present_value(DISCOUNT_RATE),
+        "duration": s.duration(DISCOUNT_RATE),
+        "convexity": s.convexity(DISCOUNT_RATE),
+    })
+
+comp_df = pl.DataFrame(comparison_rows)
+styled_gt(comp_df, "Impact of Certain Period on SPIA Pricing").fmt_currency(
+    ["premium", "pv"], decimals=0
+).fmt_number(["duration", "convexity"], decimals=2)
+```
+
+Longer certain periods increase the premium because more payments are guaranteed regardless of survival.
+
+---
+
+# Sensitivity Analysis
+
+```{python}
+#| label: spia-pv-sensitivity
+rates = [r / 1000 for r in range(10, 81)]
+pv_rows = [{"discount_rate": r, "present_value": spia.present_value(r)} for r in rates]
+pv_df = pl.DataFrame(pv_rows)
+
+fig = plot.line_chart(
+    pv_df,
+    x="discount_rate",
+    y="present_value",
+    title="SPIA Present Value vs Discount Rate",
+    xlab="Discount Rate",
+    ylab="Present Value",
+    yformat="$",
+    xformat="%",
+)
+fig.show()
+```
+
+---
+
+# Duration & Convexity
+
+```{python}
+#| label: spia-risk-metrics
+metrics = pl.DataFrame({
+    "metric": ["Present Value", "Macaulay Duration", "Convexity"],
+    "value": [
+        f"${spia.present_value(DISCOUNT_RATE):,.0f}",
+        f"{spia.duration(DISCOUNT_RATE):.2f} years",
+        f"{spia.convexity(DISCOUNT_RATE):.2f}",
+    ],
+})
+styled_gt(metrics, f"Risk Metrics @ {DISCOUNT_RATE:.0%} Discount Rate")
+```
+
+```{python}
+#| label: spia-duration-by-rate
+# Duration and convexity across discount rates
+risk_rows = []
+for r in [r / 1000 for r in range(20, 71, 5)]:
+    risk_rows.append({
+        "discount_rate": r,
+        "duration": spia.duration(r),
+        "convexity": spia.convexity(r),
+    })
+
+risk_df = pl.DataFrame(risk_rows)
+fig = plot.line_chart(
+    risk_df,
+    x="discount_rate",
+    y=["duration", "convexity"],
+    title="SPIA Duration & Convexity vs Discount Rate",
+    xlab="Discount Rate",
+    ylab="Years / Years²",
+    xformat="%",
+)
+fig.show()
+```
+
+As discount rates increase, duration decreases because distant cashflows contribute less to the present value.

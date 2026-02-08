@@ -1,0 +1,717 @@
+---
+title: "UA ALM 20260210"
+format:
+  html:
+    toc: true
+    number-sections: false
+    colorlinks: true
+    embed-resources: true
+    html-math-method: webtex
+  pdf:
+    toc: true
+    number-sections: true
+    colorlinks: true
+    geometry:
+      - left=0.5in
+      - right=0.5in
+      - top=0.5in
+      - bottom=0.5in
+    papersize: letter
+    fontsize: 11pt
+---
+
+```{python}
+# | label: setup
+from datetime import date
+import logging
+import numpy as np
+import polars as pl
+import plotly.graph_objects as go
+import plotly.io as pio
+import os
+from pathlib import Path
+import sys
+
+from great_tables import GT, style, loc
+
+sys.path.insert(0, str((Path.cwd().parent) / "src"))
+from alm.asset import Bond, Mortgage, PrivateCredit
+from alm.liability import SPIA, Term, WL, FIA, qx_from_table
+from alm.read import get_2012_iam_table, read_treasury_rates, update_credit_spreads
+from alm.core import (
+    Block,
+    InterestRateSwap,
+    SAA,
+    default_saa,
+    spia_saa,
+    dv01,
+    dollar_convexity,
+    immunize,
+)
+from alm import plot
+
+logger = logging.getLogger(__name__)
+
+pdf_bool = os.environ.get("QUARTO_PROJECT_OUTPUT_FORMAT") == "pdf"
+if pdf_bool:
+    pio.renderers.default = "png"
+else:
+    pio.renderers.default = "notebook_connected+vscode"
+
+update_credit_spreads()
+
+DISCOUNT_RATE = 0.04
+
+BRAND = "#2563eb"  # blue from palette
+
+
+def styled_gt(df, title=None):
+    """GT table with branded header and styled column labels."""
+    gt = GT(df)
+    if title:
+        gt = gt.tab_header(title)
+    return gt.tab_options(
+        heading_background_color=BRAND,
+        column_labels_background_color="#dbeafe",
+        column_labels_font_weight="bold",
+    ).tab_style(
+        style=style.text(color="white", weight="bold"),
+        locations=loc.header(),
+    )
+
+
+today = date.today()
+logger.info("DATE: %s", today)
+logger.info("AUTHOR: Brennen Slaney, FSA")
+logger.info("SOURCE: https://github.com/realslimslaney/ALM")
+```
+
+# 1. Introduction 
+{{< include ../docs/brennen-slaney.md >}}
+
+
+# 2. Building Blocks of ALM
+
+How are assets and liabilities measured, and why do actuaries care?
+
+## Assets
+
+**Assets are the money you have.** Most of it is invested in safe, predictable instruments:
+
+- Treasuries
+- Highly rated corporate bonds
+- Mortgage-Backed Securities
+- Not much Bitcoin
+
+The goal is **positive expected yield with lower variance**. Regulators enforce capital requirements and "score" the safety of assets. Investment teams manage the portfolio, but actuaries are often involved.
+
+For this presentation we'll use the following sample portfolio:
+
+```{python}
+# | label: assets
+from alm.read import read_treasury_rates
+
+rates = read_treasury_rates()
+
+assets = [
+    Bond(face_value=15_000_000, coupon_rate=0.0368, maturity=1, frequency=2, rating="AAA"),
+    Bond(face_value=10_000_000, coupon_rate=0.0349, maturity=1, frequency=2, rating="AAA"),
+    Bond(face_value=25_000_000, coupon_rate=0.0398, maturity=7, frequency=2, rating="AAA"),
+    Bond(
+        face_value=15_000_000,
+        coupon_rate=0.0425,
+        maturity=5,
+        frequency=2,
+        rating="A",
+        credit_spread=0.0027,
+    ),
+    PrivateCredit(
+        face_value=10_000_000,
+        maturity=20,
+        risk_free_rate=0.04,
+        credit_spread=0.03,
+        illiquidity_spread=0.025,
+        other_spread=0.01,
+        rating="BB",
+    ),
+]
+
+asset_summary = pl.DataFrame(
+    {
+        "instrument": [
+            "$15M UST 1Y",
+            "$10M UST 1Y",
+            "$25M UST 7Y",
+            "$15M Corp A 5Y",
+            "$10M PC BB 20Y",
+        ],
+        "face_value": [a.face_value for a in assets],
+        "coupon_rate": [
+            assets[0].coupon_rate,
+            assets[1].coupon_rate,
+            assets[2].coupon_rate,
+            assets[3].coupon_rate,
+            assets[4].total_yield,
+        ],
+        "maturity": [1, 1, 7, 5, 20],
+    }
+)
+styled_gt(asset_summary, "Sample Asset Portfolio").fmt_currency("face_value", decimals=0).fmt_percent(
+    "coupon_rate", decimals=2
+).fmt_number("maturity", decimals=0)
+```
+
+```{python}
+# | label: asset-portfolio-chart
+fig = plot.bar_chart(
+    asset_summary,
+    x="instrument",
+    y="face_value",
+    title="Portfolio Composition by Face Value",
+    xlab="Instrument",
+    ylab="Face Value",
+    yformat="$",
+)
+fig.show()
+```
+
+## Liabilities
+
+**Liabilities are money you owe.** Nearly every insurance contract comes with a liability for the insurer. The timing and amount can be known or unknown:
+
+- **Known** — Annuity Certain (fixed schedule of payments)
+- **Unknown** — Term Life (death benefit contingent on mortality)
+
+**Actuaries are the liability experts!**
+
+```{python}
+# | label: liabilities
+mortality = get_2012_iam_table()
+
+# Whole Life policy: $1M face value, net level premium via equivalence principle
+qx_wl = qx_from_table(mortality, age=40, sex="male")
+wl = WL.from_face(face_value=1_000_000, qx=qx_wl, discount_rate=DISCOUNT_RATE, age=40)
+
+# SPIA: $10k/month annuity, fair single premium = PV of expected payouts
+qx_spia = qx_from_table(mortality, age=65, sex="female")
+spia = SPIA.from_payout(annual_payout=120_000, qx=qx_spia, discount_rate=DISCOUNT_RATE, age=65)
+
+liab_summary = pl.DataFrame({
+    "product": ["Whole Life", "SPIA"],
+    "amount": [wl.face_value, spia.annual_payout],
+    "amount_label": ["face value", "annual payout"],
+    "premium": [wl.annual_premium, spia.premium],
+    "premium_label": ["annual", "single"],
+    "age": [wl.age, spia.age],
+})
+styled_gt(liab_summary, "Liability Summary").fmt_currency(["amount", "premium"], decimals=0).fmt_number("age", decimals=0)
+```
+
+## Equity
+
+**Equity = Assets - Liabilities**
+
+- Without equity, a company will be liquidated by regulators
+- Stability is important — you don't want drastic swings
+- Excess capital funds expansion, retained earnings, and dividends
+- When you buy a stock, you are taking a stake in their equity. $0 Equity = $0 Stock Price
+
+::: {.callout-tip}
+## Example
+If Assets = $100M and Liabilities = $80M, then Equity = $20M.
+That $20M funds new projects, dividends, bonuses, regulatory requirements.
+:::
+
+
+# 3. Cashflows from Assets and Liabilities
+
+What do these things actually look like?
+
+## Asset Cashflows
+
+```{python}
+# | label: asset-cashflows
+# Show cashflows for the 7Y Treasury
+ust_7y = assets[2]
+
+styled_gt(
+    ust_7y.cashflows().head(10), "$25M UST 7Y — Cashflows (first 10 periods)"
+).fmt_currency(
+    ["coupon", "principal", "total"], decimals=0
+)
+```
+
+```{python}
+# | label: asset-cashflow-metrics
+logger.info("$25M UST 7Y: PV @ %s = $%s", f"{DISCOUNT_RATE:.0%}", f"{ust_7y.present_value(DISCOUNT_RATE):,.0f}")
+logger.info("$25M UST 7Y: Duration = %.2f years", ust_7y.duration(DISCOUNT_RATE))
+```
+
+## Liability Cashflows
+
+```{python}
+# | label: liability-cashflows
+wl_cf = wl.cashflows()
+styled_gt(
+    wl_cf.head(24), "Whole Life — Expected Cashflows (first 24 periods)"
+).fmt_currency(["expected_premium", "expected_benefit", "net_cashflow"], decimals=0).fmt_number("survival_prob", decimals=4)
+```
+
+```{python}
+# | label: liability-cashflows-spia
+spia_cf = spia.cashflows()
+styled_gt(
+    spia_cf.head(24), "SPIA — Expected Cashflows (first 24 periods)"
+).fmt_currency(["payout", "expected_payout"], decimals=0).fmt_number("survival_prob", decimals=4)
+```
+
+```{python}
+# | label: liability-cashflow-chart
+# Aggregate to annual for cleaner visualization
+wl_annual = wl_cf.group_by((pl.col("period") - 1) // wl.frequency).agg(
+    pl.col("year").max().alias("year"),
+    pl.col("net_cashflow").sum().alias("wl_net_cashflow"),
+)
+spia_annual = spia_cf.group_by((pl.col("period") - 1) // spia.frequency).agg(
+    pl.col("year").max().alias("year"),
+    pl.col("expected_payout").sum().alias("spia_expected_payout"),
+)
+liab_cf_combined = wl_annual.join(spia_annual, on="year", how="inner").sort("year").head(40)
+
+fig = plot.line_chart(
+    liab_cf_combined,
+    x="year",
+    y=["wl_net_cashflow", "spia_expected_payout"],
+    title="Annual Liability Cashflows — WL vs SPIA (first 40 years)",
+    xlab="Year",
+    ylab="Annual Cashflow",
+    yformat="$",
+)
+fig.show()
+```
+
+## Equity (Surplus) View
+
+```{python}
+# | label: equity-view
+total_asset_pv = sum(a.present_value(DISCOUNT_RATE) for a in assets)
+wl_pv = wl.present_value(DISCOUNT_RATE)
+spia_pv = spia.present_value(DISCOUNT_RATE)
+total_liab_pv = wl_pv + spia_pv
+
+equity_df = pl.DataFrame({
+    "component": ["Assets", "Liabilities", "Surplus (Equity)"],
+    "present_value": [total_asset_pv, total_liab_pv, total_asset_pv - total_liab_pv],
+})
+styled_gt(equity_df, "Balance Sheet — Present Values").fmt_currency("present_value", decimals=0)
+```
+
+```{python}
+# | label: balance-sheet-chart
+fig = plot.bar_chart(
+    equity_df,
+    x="component",
+    y="present_value",
+    title="Balance Sheet at 4% Discount Rate",
+    xlab="",
+    ylab="Present Value",
+    yformat="$",
+)
+fig.show()
+```
+
+That's all there is to it — as long as interest rates never change again!
+Once we confirm that, we can go on a nice vacation and our work is done.
+
+...okay, there's more work to do.
+
+
+# 4. Key Mathematical Concepts
+
+Let's measure interest rate risk.
+
+## Duration
+
+**Duration** is the time-weighted average of the present value of cashflows.
+It measures a bond's sensitivity to interest rate changes and helps us
+linearly estimate price changes from rate movements.
+
+$$
+D = \frac{1}{P} \sum_{t=1}^{n} \frac{t}{f} \cdot \frac{CF_t}{(1 + y/f)^t}
+$$
+
+```{python}
+# | label: duration-example
+bond_example = Bond(face_value=100, coupon_rate=0.04, maturity=5, frequency=2)
+dur = bond_example.duration(0.04)
+logger.info("5Y 4%% semi-annual bond: Duration = %.2f years", dur)
+```
+
+## Convexity
+
+**Convexity** captures the second-order (curvature) effect of yield changes on price.
+Using duration *and* convexity leads to better price-change estimates.
+
+$$
+C = \frac{1}{P \cdot f^2} \sum_{t=1}^{n} \frac{t(t+1) \cdot CF_t}{(1 + y/f)^{t+2}}
+$$
+
+The second-order price approximation is:
+
+$$
+\frac{\Delta P}{P} \approx -D_{\text{mod}} \cdot \Delta y + \tfrac{1}{2} \cdot C \cdot (\Delta y)^2
+$$
+
+```{python}
+# | label: convexity-example
+conv = bond_example.convexity(0.04)
+mod_dur = dur / (1 + 0.04 / 2)
+
+logger.info("Modified Duration: %.2f", mod_dur)
+logger.info("Convexity:         %.2f", conv)
+
+# Price change estimates across a continuous range of shocks
+shock_range = [s / 1000 for s in range(-30, 31)]
+approx_rows = []
+pv_base = bond_example.present_value(0.04)
+for s in shock_range:
+    actual = (bond_example.present_value(0.04 + s) - pv_base) / pv_base
+    dur_only = -mod_dur * s
+    dur_conv = -mod_dur * s + 0.5 * conv * s**2
+    approx_rows.append({
+        "rate_shock": s,
+        "actual": actual,
+        "duration_only": dur_only,
+        "duration_convexity": dur_conv,
+    })
+
+approx_df = pl.DataFrame(approx_rows)
+fig = plot.line_chart(
+    approx_df,
+    x="rate_shock",
+    y=["actual", "duration_only", "duration_convexity"],
+    title="Price Approximation: Duration vs Duration + Convexity",
+    xlab="Rate Shock",
+    ylab="% Price Change",
+    yformat="%",
+    xformat="%",
+)
+fig.show()
+```
+
+## DV01 (Dollar Value of a Basis Point)
+
+The dollar change in value for a 1 bps parallel shift in the yield curve.
+This tells us how much money we expect our portfolio to move from a 1 bps shift.
+
+$$
+\text{DV01} = \frac{PV(y - 0.0001) - PV(y + 0.0001)}{2}
+$$
+
+```{python}
+# | label: dv01-example
+dv01_df = pl.DataFrame(
+    {
+        "instrument": asset_summary["instrument"].to_list(),
+        "dv01": [dv01(a.present_value, DISCOUNT_RATE) for a in assets],
+    }
+)
+styled_gt(dv01_df, "DV01 by Instrument").fmt_currency("dv01", decimals=0)
+```
+
+```{python}
+# | label: dv01-chart
+fig = plot.bar_chart(
+    dv01_df,
+    x="instrument",
+    y="dv01",
+    title="DV01 by Instrument",
+    xlab="",
+    ylab="DV01",
+    yformat="$",
+)
+fig.show()
+```
+
+## Key Rate Duration (KRD)
+
+The dollar change in value for a 1 bps shift at a **specific duration** on the yield curve. For example, KRD-7 measures the Dollar-Duration impact of a rate shift ONLY at year 7.
+
+Key properties:
+
+- KRDs across all tenors sum to the bond's effective duration
+- A bullet bond has KRD concentrated at its maturity
+- An amortizing bond (e.g. mortgage) has KRD spread across many tenors
+
+## Immunization (Preview)
+
+::: {.callout-important}
+## Redington Immunization Conditions
+Immunization protects a portfolio's ability to meet liabilities against interest rate movements:
+
+1. **PV Match:** PV(Assets) = PV(Liabilities)
+2. **Duration Match:** Duration(Assets) = Duration(Liabilities)
+3. **Convexity Condition:** Convexity(Assets) >= Convexity(Liabilities)
+:::
+
+
+# 5. Revisit Cashflows with Rate Shocks
+
+What happens when interest rates move?
+
+```{python}
+# | label: rate-shocks
+shocks = [-0.01, 0.0, 0.01, 0.02]
+
+rows = []
+for shock in shocks:
+    r = DISCOUNT_RATE + shock
+    pv_a = sum(a.present_value(r) for a in assets)
+    pv_l = wl.present_value(r) + spia.present_value(r)
+    rows.append({
+        "rate_shock": f"{shock:+.0%}",
+        "discount_rate": f"{r:.1%}",
+        "pv_assets": pv_a,
+        "pv_liabilities": pv_l,
+        "surplus": pv_a - pv_l,
+    })
+
+shock_df = pl.DataFrame(rows)
+styled_gt(shock_df, "Present Values Under Rate Shocks").fmt_currency(["pv_assets", "pv_liabilities", "surplus"], decimals=0)
+```
+
+```{python}
+# | label: rate-shock-chart
+fig = plot.bar_chart(
+    shock_df,
+    x="rate_shock",
+    y=["pv_assets", "pv_liabilities"],
+    title="PV of Assets vs Liabilities Under Rate Shocks",
+    xlab="Rate Shock",
+    ylab="Present Value",
+    yformat="$",
+    barmode="group",
+)
+fig.show()
+```
+
+```{python}
+# | label: pv-sensitivity-curves
+# Continuous PV sensitivity across a wider rate range
+rate_range = [r / 1000 for r in range(10, 81)]
+pv_curve_rows = []
+for r in rate_range:
+    pv_a = sum(a.present_value(r) for a in assets)
+    pv_l = wl.present_value(r) + spia.present_value(r)
+    pv_curve_rows.append({"discount_rate": r, "pv_assets": pv_a, "pv_liabilities": pv_l})
+
+pv_curve_df = pl.DataFrame(pv_curve_rows)
+fig = plot.line_chart(
+    pv_curve_df,
+    x="discount_rate",
+    y=["pv_assets", "pv_liabilities"],
+    title="PV Sensitivity to Interest Rates",
+    xlab="Discount Rate",
+    ylab="Present Value",
+    yformat="$",
+    xformat="%",
+)
+fig.show()
+```
+
+::: {.callout-warning}
+## Key Observation
+Notice how assets and liabilities respond **differently** to rate changes.
+This mismatch is the core problem ALM solves.
+:::
+
+
+# 6. Duration Hedging with Swaps
+
+## Strategic Asset Allocation
+
+**Strategic Asset Allocation (SAA)** determines how well assets and liabilities naturally hedge each other.
+
+- Are our liabilities and assets of similar duration and convexity?
+- Are they similarly sensitive to interest rates?
+- If our bonds change in value similarly to our annuities, we have a natural ALM hedge
+- If they respond differently, we need to **actively stabilize** the surplus
+
+```{python}
+# | label: saa-example
+saa = default_saa()
+saa_df = pl.DataFrame({
+    "asset_class": list(saa.weights.keys()),
+    "weight": list(saa.weights.values()),
+})
+styled_gt(saa_df, "Default SAA Weights").fmt_percent("weight", decimals=0)
+```
+
+## Interest Rate Swaps
+
+A plain-vanilla **interest rate swap** exchanges fixed payments for floating payments.
+Swaps adjust portfolio duration without buying or selling bonds:
+
+- **Receive-fixed** adds duration (like buying a bond)
+- **Pay-fixed** removes duration (like selling a bond)
+
+```{python}
+# | label: swap-example
+swap_5y = InterestRateSwap(notional=10_000_000, fixed_rate=0.04, tenor=5, pay_fixed=False)
+swap_10y = InterestRateSwap(notional=10_000_000, fixed_rate=0.04, tenor=10, pay_fixed=False)
+
+flat_floats_5 = [0.04] * swap_5y.n_periods
+flat_floats_10 = [0.04] * swap_10y.n_periods
+
+swap_df = pl.DataFrame({
+    "swap": ["5Y Receive-Fixed", "10Y Receive-Fixed"],
+    "notional": [swap_5y.notional, swap_10y.notional],
+    "dv01": [
+        swap_5y.dv01(flat_floats_5, DISCOUNT_RATE),
+        swap_10y.dv01(flat_floats_10, DISCOUNT_RATE),
+    ],
+})
+styled_gt(swap_df, "Swap DV01").fmt_currency(["notional", "dv01"], decimals=0)
+```
+
+## Duration Gap Analysis
+
+```{python}
+# | label: duration-gap
+asset_dv01 = sum(dv01(a.present_value, DISCOUNT_RATE) for a in assets)
+liab_dv01 = dv01(wl.present_value, DISCOUNT_RATE) + dv01(spia.present_value, DISCOUNT_RATE)
+
+gap_df = pl.DataFrame({
+    "component": ["Assets", "Liabilities", "Gap (L - A)"],
+    "dv01": [asset_dv01, liab_dv01, liab_dv01 - asset_dv01],
+})
+styled_gt(gap_df, "Duration Gap Analysis").fmt_currency("dv01", decimals=0)
+```
+
+
+# 7. Immunization
+
+Immunization matches **both** duration and convexity to protect surplus against rate movements.
+
+We solve a 2x2 system using two hedging instruments (e.g. a 5Y and 10Y swap):
+
+$$
+\begin{bmatrix}
+\text{DV01}_1 & \text{DV01}_2 \\
+DC_1 & DC_2
+\end{bmatrix}
+\begin{bmatrix}
+n_1 \\ n_2
+\end{bmatrix}
+=
+\begin{bmatrix}
+\Delta\text{DV01} \\
+\Delta DC
+\end{bmatrix}
+$$
+
+where $DC$ denotes dollar convexity.
+
+```{python}
+# | label: immunization
+asset_dc = sum(dollar_convexity(a.present_value, DISCOUNT_RATE) for a in assets)
+liab_dc = dollar_convexity(wl.present_value, DISCOUNT_RATE) + dollar_convexity(spia.present_value, DISCOUNT_RATE)
+
+dd_gap = liab_dv01 - asset_dv01
+dc_gap = liab_dc - asset_dc
+
+imm_gap_df = pl.DataFrame({
+    "metric": ["Dollar Duration (DV01)", "Dollar Convexity"],
+    "gap": [dd_gap, dc_gap],
+})
+styled_gt(imm_gap_df, "Gaps to Close").fmt_currency("gap", decimals=0)
+```
+
+```{python}
+# | label: immunization-solve
+# Per-unit sensitivities — bump floating rates with discount rate (parallel shift)
+dd_5y = swap_5y.dv01(flat_floats_5, DISCOUNT_RATE) / swap_5y.notional
+dc_5y = dollar_convexity(
+    lambda r: swap_5y.present_value([r] * swap_5y.n_periods, r), DISCOUNT_RATE
+) / swap_5y.notional
+dd_10y = swap_10y.dv01(flat_floats_10, DISCOUNT_RATE) / swap_10y.notional
+dc_10y = dollar_convexity(
+    lambda r: swap_10y.present_value([r] * swap_10y.n_periods, r), DISCOUNT_RATE
+) / swap_10y.notional
+
+n1, n2 = immunize(dd_gap, dc_gap, dd_5y, dc_5y, dd_10y, dc_10y)
+
+hedge_df = pl.DataFrame({
+    "instrument": ["5Y Swap", "10Y Swap"],
+    "notional": [n1, n2],
+    "direction": ["Pay-fixed" if n1 < 0 else "Receive-fixed", "Pay-fixed" if n2 < 0 else "Receive-fixed"],
+})
+styled_gt(hedge_df, "Immunization Hedge Notionals").fmt_currency("notional", decimals=0)
+```
+
+```{python}
+# | label: immunization-verify
+# Verify: re-run rate shocks with the hedge in place
+hedge_5y = InterestRateSwap(notional=abs(n1), fixed_rate=0.04, tenor=5, pay_fixed=(n1 < 0))
+hedge_10y = InterestRateSwap(notional=abs(n2), fixed_rate=0.04, tenor=10, pay_fixed=(n2 < 0))
+
+rows_hedged = []
+for shock in shocks:
+    r = DISCOUNT_RATE + shock
+    pv_a = sum(a.present_value(r) for a in assets)
+    floats_5 = [0.04 + shock] * hedge_5y.n_periods
+    floats_10 = [0.04 + shock] * hedge_10y.n_periods
+    pv_a += hedge_5y.present_value(floats_5, r)
+    pv_a += hedge_10y.present_value(floats_10, r)
+    pv_l = wl.present_value(r) + spia.present_value(r)
+    rows_hedged.append({
+        "rate_shock": f"{shock:+.0%}",
+        "surplus_unhedged": rows[shocks.index(shock)]["surplus"],
+        "surplus_hedged": pv_a - pv_l,
+    })
+
+hedged_df = pl.DataFrame(rows_hedged)
+styled_gt(hedged_df, "Surplus: Unhedged vs Immunized").fmt_currency(["surplus_unhedged", "surplus_hedged"], decimals=0)
+```
+
+```{python}
+# | label: immunization-chart
+fig = plot.bar_chart(
+    hedged_df,
+    x="rate_shock",
+    y=["surplus_unhedged", "surplus_hedged"],
+    title="Surplus Stability: Unhedged vs Immunized",
+    xlab="Rate Shock",
+    ylab="Surplus",
+    yformat="$",
+    barmode="group",
+)
+fig.show()
+```
+
+
+# 8. Conclusion
+
+::: {.callout-tip}
+## Key Takeaways
+
+- Assets must be structured to meet liabilities under multiple rate scenarios
+- **Duration** and **convexity** are the primary tools for measuring interest rate risk
+- **DV01** translates rate sensitivity into dollar terms at the portfolio level
+- **Immunization** (matching duration + convexity) protects surplus from rate movements
+- **Strategic Asset Allocation** and **interest rate swaps** are practical hedging tools
+- Diversification across asset classes reduces mismatch risk
+- Regular surplus monitoring is essential for actuarial compliance
+:::
+
+## Key ALM Strategies
+
+| Strategy | Description |
+|---|---|
+| **Immunization** | Match duration and convexity of assets to liabilities to protect surplus |
+| **Cash Flow Matching** | Structure asset cash flows to precisely meet liability payment schedules |
+| **Surplus Optimization** | Maximize expected surplus return subject to risk constraints |
+
+## Questions & Discussion
+
+Source code: [github.com/realslimslaney/ALM](https://github.com/realslimslaney/ALM)

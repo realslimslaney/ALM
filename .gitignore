@@ -214,5 +214,8 @@ quarto/_freeze/*
 quarto/**/mathjax.js
 mathjax.js
 
+# Quarto rendered HTML in docs (build artifacts)
+docs/reference/ref-*.html
+
 # Other
 brennen-slaney.md

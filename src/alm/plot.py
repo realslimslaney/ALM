@@ -206,3 +206,63 @@ def bar_chart(
         fig.update_yaxes(**f)
 
     return fig
+
+
+def area_chart(
+    df: pl.DataFrame,
+    x: str,
+    y: list[str],
+    title: str = "",
+    xlab: str | None = None,
+    ylab: str | None = None,
+    yformat: str | None = None,
+    xformat: str | None = None,
+    stacked: bool = True,
+) -> go.Figure:
+    """Stacked (or overlaid) area chart from a Polars DataFrame.
+
+    Parameters
+    ----------
+    df : pl.DataFrame
+    x : str
+        Column for the x-axis.
+    y : list[str]
+        Columns to stack as areas.
+    stacked : bool
+        If True, areas are stacked; otherwise overlaid with opacity.
+    """
+    fig = go.Figure()
+    xvals = df[x].to_list()
+
+    def _hex_to_rgba(hex_color: str, opacity: float = 0.5) -> str:
+        r, g, b = int(hex_color[1:3], 16), int(hex_color[3:5], 16), int(hex_color[5:7], 16)
+        return f"rgba({r},{g},{b},{opacity})"
+
+    for i, col in enumerate(y):
+        color = PALETTE[i % len(PALETTE)]
+        fig.add_trace(
+            go.Scatter(
+                x=xvals,
+                y=df[col].to_list(),
+                mode="lines",
+                name=col,
+                line=dict(color=color, width=0.5),
+                stackgroup="one" if stacked else None,
+                fillcolor=_hex_to_rgba(color),
+                fill="tonexty" if not stacked and i > 0 else ("tozeroy" if not stacked else None),
+            )
+        )
+
+    fig.update_layout(
+        **_LAYOUT,
+        title=title,
+        xaxis_title=xlab if xlab is not None else x,
+        yaxis_title=ylab if ylab is not None else "",
+    )
+
+    if f := _fmt(xformat):
+        fig.update_xaxes(**f)
+    if f := _fmt(yformat):
+        fig.update_yaxes(**f)
+
+    return fig

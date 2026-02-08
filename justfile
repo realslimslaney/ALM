@@ -26,18 +26,25 @@ format:
 
 # --- Documentation ---
 
-# Serve docs locally with live reload
-docs-serve:
+# Render Quarto reference pages to HTML
+render-refs:
+    uv run quarto render docs/reference/ref-spia.qmd --to html
+    uv run quarto render docs/reference/ref-whole-life.qmd --to html
+    uv run quarto render docs/reference/ref-term-life.qmd --to html
+    uv run quarto render docs/reference/ref-fia.qmd --to html
+
+# Render Quarto refs + serve docs locally with live reload
+docs-serve: render-refs
     uv run mkdocs serve
 
-# Build docs site to site/
-docs-build:
+# Render Quarto refs + build docs site to site/
+docs-build: render-refs
     uv run mkdocs build --strict
 
 # --- Quarto rendering ---
 
-# Render all QMD files to HTML
-render:
+# Render all QMD files to HTML (quarto/ + reference pages)
+render: render-refs
     uv run quarto render quarto/ --to html
 
 # Render all QMD files to PDF (requires TinyTeX: quarto install tinytex)

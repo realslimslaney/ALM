@@ -37,6 +37,10 @@ nav:
       - Fixed-Income Concepts: reference/fixed-income.md
       - Credit Spreads & Ratings: reference/credit-spreads.md
       - Data Sources: reference/data-sources.md
+      - SPIA: reference/spia.md
+      - Whole Life: reference/whole-life.md
+      - Term Life: reference/term-life.md
+      - FIA: reference/fia.md
       - Immunization with Swaps: reference/immunization-with-swaps.md
 
 markdown_extensions:
@@ -55,3 +59,5 @@ extra_javascript:
 
 exclude_docs: |
   brennen-slaney.md
+  **/*.qmd
+  **/_quarto.yaml

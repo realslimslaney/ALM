@@ -1,0 +1,331 @@
+---
+title: "WL — Whole Life Insurance"
+execute:
+  echo: false
+  warning: false
+format:
+  html:
+    toc: true
+    embed-resources: true
+    code-fold: true
+    self-contained: true
+    html-math-method: webtex
+    fig-align: center
+    fig-width: 6
+    fig-height: 4
+  pdf:
+    toc: true
+    colorlinks: true
+    geometry:
+      - left=0.75in
+      - right=0.75in
+      - top=0.75in
+      - bottom=0.75in
+    papersize: letter
+    fontsize: 11pt
+---
+
+```{python}
+#| label: setup
+#| echo: false
+import sys
+from pathlib import Path
+
+import polars as pl
+import plotly.io as pio
+import os
+
+sys.path.insert(0, str((Path.cwd().parent.parent) / "src"))
+from alm.liability import WL, qx_from_table
+from alm.read import get_2012_iam_table
+from alm import plot
+
+from great_tables import GT, style, loc
+
+pdf_bool = os.environ.get("QUARTO_PROJECT_OUTPUT_FORMAT") == "pdf"
+if pdf_bool:
+    pio.renderers.default = "png"
+else:
+    pio.renderers.default = "notebook"
+
+BRAND = "#2563eb"
+DISCOUNT_RATE = 0.04
+
+def styled_gt(df, title=None):
+    gt = GT(df)
+    if title:
+        gt = gt.tab_header(title)
+    return gt.tab_options(
+        heading_background_color=BRAND,
+        column_labels_background_color="#dbeafe",
+        column_labels_font_weight="bold",
+    ).tab_style(
+        style=style.text(color="white", weight="bold"),
+        locations=loc.header(),
+    )
+
+mortality = get_2012_iam_table()
+```
+
+# Overview
+
+**Whole Life Insurance** provides lifetime death benefit coverage in exchange for level premium payments. The policy remains in force for the insured's entire life — whenever death occurs, the face value is paid to the beneficiary.
+
+From an ALM perspective, whole life creates a **very long-duration liability**. The insurer collects premiums for decades while the death benefit obligation stretches to the end of the mortality table. This makes WL policies highly sensitive to interest rate changes.
+
+**Who buys it:** Individuals seeking permanent life insurance and estate planning.
+
+**Insurer's risk:** Mortality + interest rate mismatch over a very long horizon.
+
+---
+
+# Key Parameters
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `face_value` | float | Death benefit amount |
+| `annual_premium` | float | Level annual premium |
+| `qx` | list[float] | Annual mortality rates from insured's current age |
+| `frequency` | int | Premium payment frequency per year (default 12 = monthly) |
+| `age` | int \| None | Issue age (reference only) |
+
+**Code:** `WL` class in `src/alm/liability.py`
+
+---
+
+# Formulas
+
+## Equivalence Principle (Net Level Premium)
+
+The net level premium $P$ is set so that the present value of premiums equals the present value of benefits:
+
+$$
+\underbrace{\sum_{t=1}^{n} \frac{P/f \cdot {}_{{(t-1)/f}}p_x}{(1 + r/f)^t}}_{\text{PV of premiums}}
+= \underbrace{\sum_{t=1}^{n} \frac{F \cdot {}_{(t-1)/f|1/f}q_x}{(1 + r/f)^t}}_{\text{PV of benefits}}
+$$
+
+| Symbol | Meaning |
+|--------|---------|
+| $P$ | Annual premium |
+| $F$ | Face value (death benefit) |
+| $f$ | Payment frequency per year |
+| $r$ | Discount rate |
+| ${}_tp_x$ | Probability of survival from issue to time $t$ |
+| ${}_{t\|s}q_x$ | Probability of death between times $t$ and $t+s$ |
+
+## Net Cashflow (Insurer's Perspective)
+
+Each period's net cashflow is:
+
+$$
+\text{Net}_t = F \cdot ({}_{(t-1)/f}p_x - {}_{t/f}p_x) - \frac{P}{f} \cdot {}_{(t-1)/f}p_x
+$$
+
+Positive = net outflow for the insurer (early on, premium income exceeds expected claims; later, claims dominate).
+
+## Duration
+
+$$
+D = \frac{1}{PV} \sum_{t=1}^{n} \frac{t}{f} \cdot \frac{\text{Net}_t}{(1 + r/f)^t}
+$$
+
+## Convexity
+
+$$
+C = \frac{1}{PV \cdot f^2} \sum_{t=1}^{n} \frac{t(t+1) \cdot \text{Net}_t}{(1 + r/f)^{t+2}}
+$$
+
+---
+
+# Example
+
+```{python}
+#| label: wl-example
+qx = qx_from_table(mortality, age=40, sex="male")
+
+# Solve for actuarially fair level premium
+wl = WL.from_face(
+    face_value=1_000_000,
+    qx=qx,
+    discount_rate=DISCOUNT_RATE,
+    age=40,
+)
+
+summary = pl.DataFrame({
+    "metric": ["Face Value", "Annual Premium", "Age", "Frequency", "Horizon"],
+    "value": [
+        f"${wl.face_value:,.0f}",
+        f"${wl.annual_premium:,.0f}",
+        str(wl.age),
+        f"{wl.frequency}x/year (monthly)",
+        f"{len(wl.qx)} years",
+    ],
+})
+styled_gt(summary, "Whole Life — Example Policy")
+```
+
+---
+
+# Cashflow Profile
+
+```{python}
+#| label: wl-cashflows-table
+cf = wl.cashflows()
+styled_gt(
+    cf.head(24),
+    "Expected Cashflows (first 24 periods)"
+).fmt_currency(["expected_premium", "expected_benefit", "net_cashflow"], decimals=0).fmt_number("survival_prob", decimals=4)
+```
+
+```{python}
+#| label: wl-cashflow-chart
+# Aggregate to annual
+annual_cf = cf.group_by((pl.col("period") - 1) // wl.frequency).agg(
+    pl.col("year").max().alias("year"),
+    pl.col("expected_premium").sum().alias("expected_premium"),
+    pl.col("expected_benefit").sum().alias("expected_benefit"),
+    pl.col("net_cashflow").sum().alias("net_cashflow"),
+).sort("year")
+
+fig = plot.line_chart(
+    annual_cf,
+    x="year",
+    y=["expected_premium", "expected_benefit", "net_cashflow"],
+    title="WL Annual Cashflows — Premium vs Benefit vs Net",
+    xlab="Year",
+    ylab="Annual Cashflow",
+    yformat="$",
+)
+fig.show()
+```
+
+Early in the policy, expected premiums exceed expected benefits (net cashflow is negative for the insurer = net inflow). As the insured ages, mortality increases and expected benefits dominate.
+
+---
+
+# Premium vs Benefit — Cumulative View
+
+```{python}
+#| label: wl-cumulative
+cumulative = annual_cf.with_columns(
+    pl.col("expected_premium").cum_sum().alias("cum_premium"),
+    pl.col("expected_benefit").cum_sum().alias("cum_benefit"),
+)
+
+fig = plot.line_chart(
+    cumulative,
+    x="year",
+    y=["cum_premium", "cum_benefit"],
+    title="Cumulative Expected Premium vs Benefit",
+    xlab="Year",
+    ylab="Cumulative Amount",
+    yformat="$",
+)
+fig.show()
+```
+
+The crossover point — where cumulative expected benefits exceed cumulative expected premiums — is the breakeven year from the insurer's perspective.
+
+---
+
+# Premium Sensitivity to Issue Age
+
+```{python}
+#| label: wl-age-sensitivity
+ages = list(range(25, 71, 5))
+age_rows = []
+for a in ages:
+    qx_a = qx_from_table(mortality, age=a, sex="male")
+    w = WL.from_face(face_value=1_000_000, qx=qx_a, discount_rate=DISCOUNT_RATE, age=a)
+    age_rows.append({
+        "issue_age": a,
+        "annual_premium": w.annual_premium,
+        "duration": w.duration(DISCOUNT_RATE),
+    })
+
+age_df = pl.DataFrame(age_rows)
+styled_gt(age_df, "WL Premium & Duration by Issue Age").fmt_currency(
+    "annual_premium", decimals=0
+).fmt_number(["duration", "issue_age"], decimals=1)
+```
+
+```{python}
+#| label: wl-premium-chart
+fig = plot.bar_chart(
+    age_df,
+    x="issue_age",
+    y="annual_premium",
+    title="WL Annual Premium by Issue Age ($1M Face)",
+    xlab="Issue Age",
+    ylab="Annual Premium",
+    yformat="$",
+)
+fig.show()
+```
+
+Older issue ages require higher premiums because there are fewer years to collect premiums before the expected claim.
+
+---
+
+# Sensitivity Analysis
+
+```{python}
+#| label: wl-pv-sensitivity
+rates = [r / 1000 for r in range(10, 81)]
+pv_rows = [{"discount_rate": r, "present_value": wl.present_value(r)} for r in rates]
+pv_df = pl.DataFrame(pv_rows)
+
+fig = plot.line_chart(
+    pv_df,
+    x="discount_rate",
+    y="present_value",
+    title="WL Net Liability PV vs Discount Rate",
+    xlab="Discount Rate",
+    ylab="Net Liability PV",
+    yformat="$",
+    xformat="%",
+)
+fig.show()
+```
+
+---
+
+# Duration & Convexity
+
+```{python}
+#| label: wl-risk-metrics
+metrics = pl.DataFrame({
+    "metric": ["Net Liability PV", "Macaulay Duration", "Convexity"],
+    "value": [
+        f"${wl.present_value(DISCOUNT_RATE):,.0f}",
+        f"{wl.duration(DISCOUNT_RATE):.2f} years",
+        f"{wl.convexity(DISCOUNT_RATE):.2f}",
+    ],
+})
+styled_gt(metrics, f"Risk Metrics @ {DISCOUNT_RATE:.0%} Discount Rate")
+```
+
+```{python}
+#| label: wl-duration-by-rate
+risk_rows = []
+for r in [r / 1000 for r in range(20, 71, 5)]:
+    risk_rows.append({
+        "discount_rate": r,
+        "duration": wl.duration(r),
+        "convexity": wl.convexity(r),
+    })
+
+risk_df = pl.DataFrame(risk_rows)
+fig = plot.line_chart(
+    risk_df,
+    x="discount_rate",
+    y=["duration", "convexity"],
+    title="WL Duration & Convexity vs Discount Rate",
+    xlab="Discount Rate",
+    ylab="Years / Years²",
+    xformat="%",
+)
+fig.show()
+```
+
+Whole life policies typically have very long durations due to the lifetime coverage horizon, making them among the most interest-rate-sensitive liabilities an insurer holds.

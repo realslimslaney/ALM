@@ -181,6 +181,38 @@ class SPIA:
         )
         return conv / (pv * self.frequency**2)
 
+    @classmethod
+    def from_payout(
+        cls,
+        annual_payout: float,
+        qx: list[float],
+        discount_rate: float,
+        frequency: int = 12,
+        certain_period: int = 0,
+        age: int | None = None,
+    ) -> "SPIA":
+        """Create a SPIA with actuarially fair single premium.
+
+        The fair premium equals the present value of expected payouts
+        at the given discount rate.
+        """
+        temp = cls(
+            premium=0.0,
+            annual_payout=annual_payout,
+            qx=qx,
+            frequency=frequency,
+            certain_period=certain_period,
+            age=age,
+        )
+        return cls(
+            premium=temp.present_value(discount_rate),
+            annual_payout=annual_payout,
+            qx=qx,
+            frequency=frequency,
+            certain_period=certain_period,
+            age=age,
+        )
+
 
 # ---------------------------------------------------------------------------
 # WL – Whole Life Insurance
@@ -297,6 +329,45 @@ class WL:
             for t, ncf in zip(cf["period"], cf["net_cashflow"], strict=True)
         )
         return conv / (pv * self.frequency**2)
+
+    @classmethod
+    def from_face(
+        cls,
+        face_value: float,
+        qx: list[float],
+        discount_rate: float,
+        frequency: int = 12,
+        age: int | None = None,
+    ) -> "WL":
+        """Create a WL with net level premium via the equivalence principle.
+
+        Solves for the annual premium P such that PV(premiums) = PV(benefits).
+        """
+        r = discount_rate / frequency
+        n_periods = len(qx) * frequency
+
+        pv_benefits = 0.0
+        pv_annuity = 0.0
+
+        for t in range(1, n_periods + 1):
+            yr_start = (t - 1) / frequency
+            yr_end = t / frequency
+            sp_start = _survival_prob(qx, yr_start)
+            sp_end = _survival_prob(qx, yr_end)
+            death_prob = sp_start - sp_end
+            v_t = (1 + r) ** (-t)
+
+            pv_benefits += face_value * death_prob * v_t
+            pv_annuity += (sp_start / frequency) * v_t
+
+        fair_annual_premium = pv_benefits / pv_annuity
+        return cls(
+            face_value=face_value,
+            annual_premium=fair_annual_premium,
+            qx=qx,
+            frequency=frequency,
+            age=age,
+        )
 
 
 # ---------------------------------------------------------------------------

@@ -1,0 +1,337 @@
+---
+title: "Term — Term Life Insurance"
+execute:
+  echo: false
+  warning: false
+format:
+  html:
+    toc: true
+    embed-resources: true
+    code-fold: true
+    self-contained: true
+    html-math-method: webtex
+    fig-align: center
+    fig-width: 6
+    fig-height: 4
+  pdf:
+    toc: true
+    colorlinks: true
+    geometry:
+      - left=0.75in
+      - right=0.75in
+      - top=0.75in
+      - bottom=0.75in
+    papersize: letter
+    fontsize: 11pt
+---
+
+```{python}
+#| label: setup
+#| echo: false
+import sys
+from pathlib import Path
+
+import polars as pl
+import plotly.io as pio
+import os
+
+sys.path.insert(0, str((Path.cwd().parent.parent) / "src"))
+from alm.liability import Term, WL, qx_from_table
+from alm.read import get_2012_iam_table
+from alm import plot
+
+from great_tables import GT, style, loc
+
+pdf_bool = os.environ.get("QUARTO_PROJECT_OUTPUT_FORMAT") == "pdf"
+if pdf_bool:
+    pio.renderers.default = "png"
+else:
+    pio.renderers.default = "notebook"
+
+BRAND = "#2563eb"
+DISCOUNT_RATE = 0.04
+
+def styled_gt(df, title=None):
+    gt = GT(df)
+    if title:
+        gt = gt.tab_header(title)
+    return gt.tab_options(
+        heading_background_color=BRAND,
+        column_labels_background_color="#dbeafe",
+        column_labels_font_weight="bold",
+    ).tab_style(
+        style=style.text(color="white", weight="bold"),
+        locations=loc.header(),
+    )
+
+mortality = get_2012_iam_table()
+```
+
+# Overview
+
+**Term Life Insurance** provides death benefit coverage for a fixed period (the "term"). If the insured survives the term, the policy expires with no payout. Level premiums are paid throughout the policy term.
+
+Compared to whole life, term policies have **shorter durations** and **lower premiums** because coverage is time-limited. From an ALM perspective, the liability horizon is capped at the policy term, making cashflow matching more tractable.
+
+**Who buys it:** Working-age individuals seeking affordable coverage during peak earning/family years (e.g., 20-year term to cover a mortgage).
+
+**Insurer's risk:** Mortality within the term + interest rate mismatch, but over a bounded horizon.
+
+---
+
+# Key Parameters
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `face_value` | float | Death benefit amount |
+| `annual_premium` | float | Level annual premium |
+| `term` | int | Policy term in years |
+| `qx` | list[float] | Annual mortality rates (must have at least *term* values) |
+| `frequency` | int | Premium payment frequency per year (default 12 = monthly) |
+| `age` | int \| None | Issue age (reference only) |
+
+**Code:** `Term` class in `src/alm/liability.py`
+
+---
+
+# Formulas
+
+## Net Cashflow
+
+Identical to whole life, but limited to the policy term $T$:
+
+$$
+\text{Net}_t = F \cdot ({}_{(t-1)/f}p_x - {}_{t/f}p_x) - \frac{P}{f} \cdot {}_{(t-1)/f}p_x
+\quad \text{for } t = 1, \ldots, T \cdot f
+$$
+
+| Symbol | Meaning |
+|--------|---------|
+| $F$ | Face value (death benefit) |
+| $P$ | Annual premium |
+| $f$ | Payment frequency per year |
+| $T$ | Policy term in years |
+| ${}_tp_x$ | Survival probability to time $t$ |
+
+## Present Value
+
+$$
+PV = \sum_{t=1}^{T \cdot f} \frac{\text{Net}_t}{(1 + r/f)^t}
+$$
+
+## Duration
+
+$$
+D = \frac{1}{PV} \sum_{t=1}^{T \cdot f} \frac{t}{f} \cdot \frac{\text{Net}_t}{(1 + r/f)^t}
+$$
+
+## Convexity
+
+$$
+C = \frac{1}{PV \cdot f^2} \sum_{t=1}^{T \cdot f} \frac{t(t+1) \cdot \text{Net}_t}{(1 + r/f)^{t+2}}
+$$
+
+---
+
+# Example
+
+```{python}
+#| label: term-example
+qx = qx_from_table(mortality, age=35, sex="male")
+
+term = Term(
+    face_value=500_000,
+    annual_premium=1_200,
+    term=20,
+    qx=qx,
+    frequency=12,
+    age=35,
+)
+
+summary = pl.DataFrame({
+    "metric": ["Face Value", "Annual Premium", "Term", "Age", "Frequency"],
+    "value": [
+        f"${term.face_value:,.0f}",
+        f"${term.annual_premium:,.0f}",
+        f"{term.term} years",
+        str(term.age),
+        f"{term.frequency}x/year (monthly)",
+    ],
+})
+styled_gt(summary, "Term Life — Example Policy")
+```
+
+---
+
+# Cashflow Profile
+
+```{python}
+#| label: term-cashflows-table
+cf = term.cashflows()
+styled_gt(
+    cf.head(24),
+    "Expected Cashflows (first 24 periods)"
+).fmt_currency(["expected_premium", "expected_benefit", "net_cashflow"], decimals=0).fmt_number("survival_prob", decimals=4)
+```
+
+```{python}
+#| label: term-cashflow-chart
+annual_cf = cf.group_by((pl.col("period") - 1) // term.frequency).agg(
+    pl.col("year").max().alias("year"),
+    pl.col("expected_premium").sum().alias("expected_premium"),
+    pl.col("expected_benefit").sum().alias("expected_benefit"),
+    pl.col("net_cashflow").sum().alias("net_cashflow"),
+).sort("year")
+
+fig = plot.line_chart(
+    annual_cf,
+    x="year",
+    y=["expected_premium", "expected_benefit", "net_cashflow"],
+    title="Term Life Annual Cashflows (20-Year Term)",
+    xlab="Year",
+    ylab="Annual Cashflow",
+    yformat="$",
+)
+fig.show()
+```
+
+Unlike whole life, cashflows stop abruptly at year 20. Expected benefits grow over the term as the insured ages and mortality increases, but the total exposure is bounded.
+
+---
+
+# Term Length Comparison
+
+```{python}
+#| label: term-comparison
+terms = [10, 15, 20, 25, 30]
+comp_rows = []
+for t in terms:
+    tm = Term(
+        face_value=500_000,
+        annual_premium=1_200,
+        term=t,
+        qx=qx,
+        frequency=12,
+        age=35,
+    )
+    comp_rows.append({
+        "term_years": t,
+        "pv_net_liability": tm.present_value(DISCOUNT_RATE),
+        "duration": tm.duration(DISCOUNT_RATE),
+        "convexity": tm.convexity(DISCOUNT_RATE),
+    })
+
+comp_df = pl.DataFrame(comp_rows)
+styled_gt(comp_df, "Impact of Policy Term on Risk Metrics").fmt_currency(
+    "pv_net_liability", decimals=0
+).fmt_number(["duration", "convexity"], decimals=2)
+```
+
+Longer terms increase both the net liability PV and duration, as more years of mortality exposure are included.
+
+---
+
+# Term vs Whole Life Comparison
+
+```{python}
+#| label: term-vs-wl
+# Create equivalent WL for same insured
+wl = WL.from_face(face_value=500_000, qx=qx, discount_rate=DISCOUNT_RATE, age=35)
+term_20 = Term(
+    face_value=500_000, annual_premium=1_200, term=20, qx=qx, frequency=12, age=35,
+)
+
+wl_cf = wl.cashflows()
+wl_annual = wl_cf.group_by((pl.col("period") - 1) // wl.frequency).agg(
+    pl.col("year").max().alias("year"),
+    pl.col("net_cashflow").sum().alias("wl_net_cashflow"),
+).sort("year").head(50)
+
+term_cf = term_20.cashflows()
+term_annual = term_cf.group_by((pl.col("period") - 1) // term_20.frequency).agg(
+    pl.col("year").max().alias("year"),
+    pl.col("net_cashflow").sum().alias("term_net_cashflow"),
+).sort("year")
+
+combined = wl_annual.join(term_annual, on="year", how="left").with_columns(
+    pl.col("term_net_cashflow").fill_null(0)
+)
+
+fig = plot.line_chart(
+    combined,
+    x="year",
+    y=["wl_net_cashflow", "term_net_cashflow"],
+    title="Net Cashflow: 20-Year Term vs Whole Life ($500K Face, Age 35 Male)",
+    xlab="Year",
+    ylab="Annual Net Cashflow",
+    yformat="$",
+)
+fig.show()
+```
+
+The term policy's cashflows end at year 20, while whole life extends for the insured's full mortality horizon. This fundamental difference drives the duration and convexity gap between the two products.
+
+---
+
+# Sensitivity Analysis
+
+```{python}
+#| label: term-pv-sensitivity
+rates = [r / 1000 for r in range(10, 81)]
+pv_rows = [{"discount_rate": r, "present_value": term.present_value(r)} for r in rates]
+pv_df = pl.DataFrame(pv_rows)
+
+fig = plot.line_chart(
+    pv_df,
+    x="discount_rate",
+    y="present_value",
+    title="Term Life Net Liability PV vs Discount Rate",
+    xlab="Discount Rate",
+    ylab="Net Liability PV",
+    yformat="$",
+    xformat="%",
+)
+fig.show()
+```
+
+---
+
+# Duration & Convexity
+
+```{python}
+#| label: term-risk-metrics
+metrics = pl.DataFrame({
+    "metric": ["Net Liability PV", "Macaulay Duration", "Convexity"],
+    "value": [
+        f"${term.present_value(DISCOUNT_RATE):,.0f}",
+        f"{term.duration(DISCOUNT_RATE):.2f} years",
+        f"{term.convexity(DISCOUNT_RATE):.2f}",
+    ],
+})
+styled_gt(metrics, f"Risk Metrics @ {DISCOUNT_RATE:.0%} Discount Rate")
+```
+
+```{python}
+#| label: term-duration-by-rate
+risk_rows = []
+for r in [r / 1000 for r in range(20, 71, 5)]:
+    risk_rows.append({
+        "discount_rate": r,
+        "duration": term.duration(r),
+        "convexity": term.convexity(r),
+    })
+
+risk_df = pl.DataFrame(risk_rows)
+fig = plot.line_chart(
+    risk_df,
+    x="discount_rate",
+    y=["duration", "convexity"],
+    title="Term Life Duration & Convexity vs Discount Rate",
+    xlab="Discount Rate",
+    ylab="Years / Years²",
+    xformat="%",
+)
+fig.show()
+```
+
+Term policies have shorter durations than whole life because cashflows are capped at the policy term, making them easier to hedge with medium-term fixed-income assets.

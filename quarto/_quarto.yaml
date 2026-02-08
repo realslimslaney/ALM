@@ -7,6 +7,7 @@ format:
     embed-resources: true
     code-fold: true   # Collapse code blocks
     self-contained: true  # Good for sharing offline
+    html-math-method: webtex  # Renders math as inline SVG — works with embed-resources
     fig-align: center
     fig-width: 6
     fig-height: 4
