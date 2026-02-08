@@ -1,9 +1,9 @@
-"""Tests for alm.liability module (SPIA, WL, Term, FIA)."""
+"""Tests for alm.liability module (SPIA, WL, Term, FIA, qx_from_table)."""
 
 import polars as pl
 import pytest
 
-from alm.liability import FIA, SPIA, WL, Term
+from alm.liability import FIA, SPIA, WL, Term, qx_from_table
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -13,6 +13,56 @@ from alm.liability import FIA, SPIA, WL, Term
 def _flat_qx(rate: float, years: int) -> list[float]:
     """Return a flat mortality-rate vector."""
     return [rate] * years
+
+
+# ---------------------------------------------------------------------------
+# qx_from_table
+# ---------------------------------------------------------------------------
+
+
+class TestQxFromTable:
+    """Tests for the qx_from_table helper."""
+
+    @pytest.fixture()
+    def mort_table(self) -> pl.DataFrame:
+        """Small mortality table with both sexes."""
+        return pl.DataFrame(
+            {
+                "age": [60, 61, 62, 60, 61, 62],
+                "sex": ["male", "male", "male", "female", "female", "female"],
+                "qx": [0.01, 0.012, 0.015, 0.008, 0.009, 0.011],
+            }
+        )
+
+    def test_returns_list_of_floats(self, mort_table: pl.DataFrame):
+        result = qx_from_table(mort_table, age=60, sex="male")
+        assert isinstance(result, list)
+        assert all(isinstance(v, float) for v in result)
+
+    def test_filters_by_age(self, mort_table: pl.DataFrame):
+        result = qx_from_table(mort_table, age=61, sex="male")
+        assert len(result) == 2
+        assert result[0] == pytest.approx(0.012)
+
+    def test_filters_by_sex(self, mort_table: pl.DataFrame):
+        male = qx_from_table(mort_table, age=60, sex="male")
+        female = qx_from_table(mort_table, age=60, sex="female")
+        assert male[0] == pytest.approx(0.01)
+        assert female[0] == pytest.approx(0.008)
+
+    def test_sex_case_insensitive(self, mort_table: pl.DataFrame):
+        result = qx_from_table(mort_table, age=60, sex="Male")
+        assert len(result) == 3
+
+    def test_no_sex_filter(self):
+        """When sex is None, returns all rows at or above the given age."""
+        table = pl.DataFrame({"age": [50, 51, 52], "qx": [0.005, 0.006, 0.007]})
+        result = qx_from_table(table, age=51)
+        assert len(result) == 2
+
+    def test_empty_result_raises(self, mort_table: pl.DataFrame):
+        with pytest.raises(ValueError, match="No rows"):
+            qx_from_table(mort_table, age=100, sex="male")
 
 
 # ---------------------------------------------------------------------------
@@ -58,9 +108,7 @@ class TestSPIA:
         cf = spia_cp.cashflows()
         certain_rows = cf.filter(pl.col("year") <= 5.0)
         pmt = 6_000 / 12
-        assert all(
-            v == pytest.approx(pmt) for v in certain_rows["expected_payout"].to_list()
-        )
+        assert all(v == pytest.approx(pmt) for v in certain_rows["expected_payout"].to_list())
 
     def test_pv_positive(self, spia: SPIA):
         assert spia.present_value(0.05) > 0

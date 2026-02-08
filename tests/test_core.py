@@ -43,9 +43,7 @@ class TestInterestRateSwap:
             "net_cashflow",
         ]
 
-    def test_cashflows_year_column(
-        self, swap: InterestRateSwap, flat_floating: list[float]
-    ):
+    def test_cashflows_year_column(self, swap: InterestRateSwap, flat_floating: list[float]):
         cf = swap.cashflows(flat_floating)
         assert cf["year"][0] == pytest.approx(0.5)
         assert cf["year"][-1] == pytest.approx(5.0)
@@ -59,9 +57,7 @@ class TestInterestRateSwap:
         cf = swap.cashflows(flat_floating)
         assert all(v < 0 for v in cf["net_cashflow"].to_list())
 
-    def test_pay_fixed_positive_when_floating_exceeds_fixed(
-        self, swap: InterestRateSwap
-    ):
+    def test_pay_fixed_positive_when_floating_exceeds_fixed(self, swap: InterestRateSwap):
         high_float = [0.06] * swap.n_periods
         cf = swap.cashflows(high_float)
         assert all(v > 0 for v in cf["net_cashflow"].to_list())
@@ -102,21 +98,15 @@ class TestInterestRateSwap:
 
     # ---- duration / convexity ---------------------------------------------
 
-    def test_duration_returns_float(
-        self, swap: InterestRateSwap, flat_floating: list[float]
-    ):
+    def test_duration_returns_float(self, swap: InterestRateSwap, flat_floating: list[float]):
         assert isinstance(swap.duration(flat_floating, 0.04), float)
 
-    def test_convexity_returns_float(
-        self, swap: InterestRateSwap, flat_floating: list[float]
-    ):
+    def test_convexity_returns_float(self, swap: InterestRateSwap, flat_floating: list[float]):
         assert isinstance(swap.convexity(flat_floating, 0.04), float)
 
     # ---- dv01 -------------------------------------------------------------
 
-    def test_dv01_pay_fixed_negative(
-        self, swap: InterestRateSwap, flat_floating: list[float]
-    ):
+    def test_dv01_pay_fixed_negative(self, swap: InterestRateSwap, flat_floating: list[float]):
         """Pay-fixed swap loses value when rates fall → negative DV01."""
         assert swap.dv01(flat_floating, 0.04) < 0
 
@@ -194,9 +184,7 @@ class TestDollarConvexity:
         coupon = Bond(face_value=1_000_000, coupon_rate=0.05, maturity=10, frequency=2)
         # Compare convexity per dollar of PV (normalised)
         dc_zc = dollar_convexity(zc.present_value, 0.05) / zc.present_value(0.05)
-        dc_cp = dollar_convexity(coupon.present_value, 0.05) / coupon.present_value(
-            0.05
-        )
+        dc_cp = dollar_convexity(coupon.present_value, 0.05) / coupon.present_value(0.05)
         assert dc_zc > dc_cp
 
 

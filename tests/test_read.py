@@ -10,8 +10,8 @@ import pytest
 from alm.read import (
     _TREASURY_SERIES,
     _get_fred,
+    get_2012_iam_table,
     read_mortality_table,
-    read_mortality_table_combined,
     read_treasury_rates,
 )
 
@@ -60,9 +60,7 @@ class TestReadTreasuryRates:
         series_map = {"DGS10": _make_mock_series(dates, [4.5, 4.6])}
 
         with _patch_fred(series_map):
-            df = read_treasury_rates(
-                start="2025-01-02", end="2025-01-03", tenors=["10Y"]
-            )
+            df = read_treasury_rates(start="2025-01-02", end="2025-01-03", tenors=["10Y"])
 
         assert isinstance(df, pl.DataFrame)
         assert df.columns == ["date", "10Y"]
@@ -96,9 +94,7 @@ class TestReadTreasuryRates:
     def test_defaults_to_all_tenors(self):
         """When tenors=None, all tenors in _TREASURY_SERIES are fetched."""
         dates = ["2025-01-02"]
-        series_map = {
-            sid: _make_mock_series(dates, [4.0]) for sid in _TREASURY_SERIES.values()
-        }
+        series_map = {sid: _make_mock_series(dates, [4.0]) for sid in _TREASURY_SERIES.values()}
 
         with _patch_fred(series_map) as mock:
             df = read_treasury_rates(tenors=None)
@@ -155,23 +151,23 @@ class TestReadMortalityTable:
         assert df["qx"].max() <= 1
 
 
-# ---------- read_mortality_table_combined ----------
-class TestReadMortalityTableCombined:
-    """Tests for read_mortality_table_combined."""
+# ---------- get_2012_iam_table ----------
+class TestGet2012IamTable:
+    """Tests for get_2012_iam_table."""
 
     def test_combined_shape(self):
-        df = read_mortality_table_combined()
+        df = get_2012_iam_table()
         assert df.shape == (242, 3)
 
     def test_combined_columns(self):
-        df = read_mortality_table_combined()
+        df = get_2012_iam_table()
         assert df.columns == ["age", "qx", "sex"]
 
     def test_both_sexes_present(self):
-        df = read_mortality_table_combined()
+        df = get_2012_iam_table()
         assert sorted(df["sex"].unique().to_list()) == ["female", "male"]
 
     def test_sorted_by_age_and_sex(self):
-        df = read_mortality_table_combined()
+        df = get_2012_iam_table()
         ages = df["age"].to_list()
         assert ages == sorted(ages)

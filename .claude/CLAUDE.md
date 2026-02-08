@@ -1,5 +1,9 @@
 # Project Guidelines
 
+## Terminology
+
+- **ALM** stands for **Asset-Liability Management**
+
 ## General
 
 - This is an educational ALM (Asset-Liability Management) toolkit for actuarial science students
@@ -25,3 +29,4 @@
 - Manage dependencies with `uv`
 - Run scripts via `uv run python scripts/<name>.py`
 - Run tests via `uv run pytest`
+- Run all checks (pre-commit + tests) via `just check`
