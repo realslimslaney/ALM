@@ -123,7 +123,7 @@ def read_mortality_table(sex: str) -> pl.DataFrame:
     return result
 
 
-def read_mortality_table_combined() -> pl.DataFrame:
+def get_2012_iam_table() -> pl.DataFrame:
     """Read and combine male and female SOA IAM 2012 Basic mortality tables.
 
     Returns

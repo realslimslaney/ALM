@@ -8,6 +8,36 @@ import polars as pl
 logger = logging.getLogger(__name__)
 
 
+def qx_from_table(table: pl.DataFrame, age: int, sex: str | None = None) -> list[float]:
+    """Extract qx values from a mortality table starting at a given age.
+
+    Parameters
+    ----------
+    table : pl.DataFrame
+        Mortality table with columns ``age`` (Int64) and ``qx`` (Float64),
+        as returned by :func:`alm.read.read_mortality_table` or
+        :func:`alm.read.get_2012_iam_table`.
+    age : int
+        Issue age (inclusive).  Returns qx from this age to the end of
+        the table.
+    sex : str, optional
+        ``"male"`` or ``"female"``.  Required when *table* contains
+        both sexes (i.e. from :func:`~alm.read.get_2012_iam_table`).
+
+    Returns
+    -------
+    list[float]
+        ``qx[0]`` corresponds to age *age*, ``qx[1]`` to *age + 1*, etc.
+    """
+    subset = table
+    if sex is not None:
+        subset = subset.filter(pl.col("sex") == sex.lower())
+    subset = subset.filter(pl.col("age") >= age).sort("age")
+    if subset.is_empty():
+        raise ValueError(f"No rows in mortality table for age >= {age}")
+    return subset["qx"].to_list()
+
+
 def _validate_qx(qx: list[float]) -> None:
     """Warn if any qx values look unreasonable."""
     for i, q in enumerate(qx):
@@ -61,11 +91,14 @@ class SPIA:
         Total annual payout to the annuitant.
     qx : list[float]
         Annual mortality rates from the annuitant's current age.
-        Length determines the modelling horizon.
+        Length determines the modelling horizon.  Use
+        :func:`qx_from_table` to build from a mortality table.
     frequency : int
         Payouts per year (default 12 = monthly).
     certain_period : int
         Guaranteed payment period in years (default 0 = life only).
+    age : int, optional
+        Issue age — stored for reference, does not affect calculations.
     """
 
     premium: float
@@ -73,6 +106,7 @@ class SPIA:
     qx: list[float]
     frequency: int = 12
     certain_period: int = 0
+    age: int | None = None
 
     def __post_init__(self) -> None:
         _validate_qx(self.qx)
@@ -161,14 +195,18 @@ class WL:
         Level annual premium.
     qx : list[float]
         Annual mortality rates from the insured's current age.
+        Use :func:`qx_from_table` to build from a mortality table.
     frequency : int
         Premium payment frequency per year (default 12 = monthly).
+    age : int, optional
+        Issue age — stored for reference, does not affect calculations.
     """
 
     face_value: float
     annual_premium: float
     qx: list[float]
     frequency: int = 12
+    age: int | None = None
 
     def __post_init__(self) -> None:
         _validate_qx(self.qx)
@@ -270,9 +308,12 @@ class Term:
         Policy term in years.
     qx : list[float]
         Annual mortality rates from the insured's current age.
-        Must have at least *term* values.
+        Must have at least *term* values.  Use :func:`qx_from_table`
+        to build from a mortality table.
     frequency : int
         Premium payment frequency per year (default 12 = monthly).
+    age : int, optional
+        Issue age — stored for reference, does not affect calculations.
     """
 
     face_value: float
@@ -280,6 +321,7 @@ class Term:
     term: int
     qx: list[float]
     frequency: int = 12
+    age: int | None = None
 
     def __post_init__(self) -> None:
         _validate_qx(self.qx)
@@ -376,13 +418,16 @@ class FIA:
         Accumulation period in years.
     qx : list[float]
         Annual mortality rates from the annuitant's current age.
-        Must have at least *term* values.
+        Must have at least *term* values.  Use :func:`qx_from_table`
+        to build from a mortality table.
     floor : float
         Minimum annual credited rate (default 0.0 = 0 %).
     cap : float
         Maximum annual credited rate (default 0.06 = 6 %).
     participation_rate : float
         Fraction of the index return credited to the account (default 1.0).
+    age : int, optional
+        Issue age — stored for reference, does not affect calculations.
     """
 
     premium: float
@@ -391,6 +436,7 @@ class FIA:
     floor: float = 0.0
     cap: float = 0.06
     participation_rate: float = 1.0
+    age: int | None = None
 
     def __post_init__(self) -> None:
         _validate_qx(self.qx)
