@@ -37,9 +37,7 @@ def dv01(pv_func: Callable[[float], float], rate: float, bump: float = 0.0001) -
     return (pv_func(rate - bump) - pv_func(rate + bump)) / 2
 
 
-def dollar_convexity(
-    pv_func: Callable[[float], float], rate: float, bump: float = 0.0001
-) -> float:
+def dollar_convexity(pv_func: Callable[[float], float], rate: float, bump: float = 0.0001) -> float:
     """Dollar convexity via central finite difference.
 
     Measures how DV01 itself changes as rates move — the second-order
@@ -224,8 +222,7 @@ class InterestRateSwap:
         r = discount_rate / self.frequency
         cf = self.cashflows(floating_rates)
         pv = sum(
-            ncf / (1 + r) ** t
-            for t, ncf in zip(cf["period"], cf["net_cashflow"], strict=True)
+            ncf / (1 + r) ** t for t, ncf in zip(cf["period"], cf["net_cashflow"], strict=True)
         )
         if abs(pv) > self.notional:
             logger.warning(

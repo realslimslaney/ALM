@@ -1,6 +1,6 @@
 [project]
 name = "alm"
-version = "0.1.1"
+version = "1.0.0"
 description = "Educational toolkit demonstrating Asset-Liability Management (ALM) concepts for actuarial science students"
 readme = "README.md"
 authors = [
@@ -11,6 +11,7 @@ dependencies = [
     "fredapi>=0.5.2",
     "great-tables>=0.20.0",
     "jupyter>=1.1.1",
+    "matplotlib>=3.10.8",
     "plotly>=6.5.2",
     "polars>=1.37.1",
     "python-dotenv>=1.2.1",
@@ -27,7 +28,7 @@ dev = [
 
 [tool.ruff]
 target-version = "py312"
-line-length = 88
+line-length = 100
 
 [tool.ruff.lint]
 select = [
@@ -39,6 +40,9 @@ select = [
     "B",   # flake8-bugbear
     "SIM", # flake8-simplify
 ]
+
+[tool.ruff.lint.pycodestyle]
+max-line-length = 100
 
 [tool.ruff.lint.isort]
 known-first-party = ["alm"]

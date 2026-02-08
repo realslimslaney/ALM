@@ -64,10 +64,7 @@ class Bond:
         """Present value at a flat annual discount rate."""
         r = discount_rate / self.frequency
         cf = self.cashflows()
-        pv = sum(
-            total / (1 + r) ** t
-            for t, total in zip(cf["period"], cf["total"], strict=True)
-        )
+        pv = sum(total / (1 + r) ** t for t, total in zip(cf["period"], cf["total"], strict=True))
         if pv < 0:
             logger.warning("Bond PV is negative (%.2f); check discount rate", pv)
         return pv
@@ -84,9 +81,7 @@ class Bond:
         )
         dur = weighted / pv
         if dur < 0 or dur > self.maturity:
-            logger.warning(
-                "Bond duration %.2f outside expected range [0, %d]", dur, self.maturity
-            )
+            logger.warning("Bond duration %.2f outside expected range [0, %d]", dur, self.maturity)
         return dur
 
     def convexity(self, discount_rate: float) -> float:
@@ -180,10 +175,7 @@ class Mortgage:
         """Present value at a flat annual discount rate."""
         r = discount_rate / self.frequency
         cf = self.cashflows()
-        pv = sum(
-            pmt / (1 + r) ** t
-            for t, pmt in zip(cf["period"], cf["payment"], strict=True)
-        )
+        pv = sum(pmt / (1 + r) ** t for t, pmt in zip(cf["period"], cf["payment"], strict=True))
         if pv < 0:
             logger.warning("Mortgage PV is negative (%.2f); check discount rate", pv)
         return pv

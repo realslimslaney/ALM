@@ -4,6 +4,20 @@
 
 - Python 3.12+
 - [uv](https://docs.astral.sh/uv/getting-started/installation/)
+- [just](https://github.com/casey/just) (task runner)
+
+### Installing just
+
+| Platform | Command |
+|----------|---------|
+| **Windows (Chocolatey)** | `choco install just` |
+| **Windows (WinGet)** | `winget install Casey.Just` |
+| **Windows (Scoop)** | `scoop install just` |
+| **macOS (Homebrew)** | `brew install just` |
+| **Linux (apt — Ubuntu/Debian)** | `sudo apt install just` |
+| **Linux (Homebrew)** | `brew install just` |
+| **Any (cargo)** | `cargo install just` |
+| **Any (pipx)** | `pipx install rust-just` |
 
 > **New to development?** See the [Environment Setup](environment-setup.md) guide for
 > step-by-step instructions to install all prerequisites.
@@ -46,14 +60,24 @@
    uv run pytest
    ```
 
-## Linting and Formatting
+## Common Tasks
 
-This project uses [ruff](https://docs.astral.sh/ruff/) for linting and formatting.
+This project uses [just](https://github.com/casey/just) as a task runner. Run `just` with no arguments to see all available recipes.
 
 ```bash
-uv run ruff check .       # lint
-uv run ruff format .      # format
+just              # list all recipes
+just test         # run tests
+just lint         # lint with ruff
+just format       # format with ruff
+just render       # render all QMD files to HTML
+just render-pdf   # render all QMD files to PDF
+just render-one convexity-hedging      # render a single report to HTML
+just render-one-pdf convexity-hedging  # render a single report to PDF
+just run run_alm_demonstration         # run a script
 ```
+
+> **PDF output** requires a LaTeX distribution. Install TinyTeX via Quarto:
+> `quarto install tinytex`
 
 ## Project Layout
 
