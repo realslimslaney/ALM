@@ -1,10 +1,20 @@
-"""Tests for alm.core module (InterestRateSwap, hedging utilities)."""
+"""Tests for alm.core module (InterestRateSwap, hedging utilities, SAA)."""
 
 import polars as pl
 import pytest
 
 from alm.asset import Bond
-from alm.core import InterestRateSwap, dollar_convexity, dv01, immunize
+from alm.core import (
+    SAA,
+    InterestRateSwap,
+    default_saa,
+    dollar_convexity,
+    dv01,
+    immunize,
+    irr,
+    spia_saa,
+    term_saa,
+)
 
 
 class TestInterestRateSwap:
@@ -262,3 +272,89 @@ class TestImmunize:
         )
         assert 5.0 * n1 + 10.0 * n2 == pytest.approx(100)
         assert 50.0 * n1 + 20.0 * n2 == pytest.approx(-500)
+
+
+# ===================================================================
+# Tests for SAA class
+# ===================================================================
+
+
+class TestSAA:
+    """Tests for the SAA class."""
+
+    def test_valid_weights(self):
+        saa = SAA(weights={"govt_bonds": 0.5, "corp_bonds": 0.5})
+        assert sum(saa.weights.values()) == pytest.approx(1.0)
+
+    def test_weights_not_summing_to_one_raises(self):
+        with pytest.raises(ValueError, match="sum to 1.0"):
+            SAA(weights={"govt_bonds": 0.5, "corp_bonds": 0.4})
+
+    def test_negative_weight_raises(self):
+        with pytest.raises(ValueError, match="negative"):
+            SAA(weights={"a": -0.1, "b": 1.1})
+
+    def test_private_credit_over_10_pct_raises(self):
+        with pytest.raises(ValueError, match="10%"):
+            SAA(weights={"govt_bonds": 0.5, "private_credit": 0.5})
+
+    def test_private_credit_at_10_pct_ok(self):
+        saa = SAA(weights={"govt_bonds": 0.9, "private_credit": 0.10})
+        assert saa.weights["private_credit"] == 0.10
+
+    def test_allocation_method(self):
+        saa = SAA(weights={"govt_bonds": 0.6, "corp_bonds": 0.4})
+        alloc = saa.allocation(1_000_000)
+        assert alloc["govt_bonds"] == pytest.approx(600_000)
+        assert alloc["corp_bonds"] == pytest.approx(400_000)
+
+    def test_default_saa(self):
+        saa = default_saa()
+        assert sum(saa.weights.values()) == pytest.approx(1.0)
+        assert saa.weights["private_credit"] <= 0.10
+
+    def test_spia_saa(self):
+        saa = spia_saa()
+        assert sum(saa.weights.values()) == pytest.approx(1.0)
+        assert saa.weights["govt_bonds"] >= 0.50
+
+    def test_term_saa(self):
+        saa = term_saa()
+        assert sum(saa.weights.values()) == pytest.approx(1.0)
+        assert saa.weights["mortgages"] >= 0.30
+
+
+# ===================================================================
+# Tests for irr() function
+# ===================================================================
+
+
+class TestIRR:
+    """Tests for the irr() internal rate of return function."""
+
+    def test_simple_one_period(self):
+        """Invest 100, receive 110 in 1 year → IRR = 10%."""
+        assert irr([-100, 110]) == pytest.approx(0.10, abs=1e-8)
+
+    def test_zero_coupon_bond(self):
+        """Invest 1000, receive 1000*(1.05)^5 in 5 years → IRR = 5%."""
+        fv = 1000 * 1.05**5
+        cfs = [-1000, 0, 0, 0, 0, fv]
+        assert irr(cfs) == pytest.approx(0.05, abs=1e-8)
+
+    def test_level_annuity(self):
+        """Bond-like: invest 1000, receive 50/yr for 10 yrs + 1000 at maturity."""
+        cfs = [-1000] + [50] * 9 + [1050]
+        assert irr(cfs) == pytest.approx(0.05, abs=1e-8)
+
+    def test_npv_at_irr_is_zero(self):
+        """Verify that NPV evaluated at the computed IRR ≈ 0."""
+        cfs = [-500, 100, 150, 200, 150]
+        r = irr(cfs)
+        npv = sum(cf / (1 + r) ** t for t, cf in enumerate(cfs))
+        assert npv == pytest.approx(0.0, abs=1e-8)
+
+    def test_non_convergence_raises(self):
+        """All-positive cashflows have no real IRR; should raise."""
+        with pytest.raises(ValueError, match="did not converge"):
+            irr([100, 100, 100], max_iter=50)
