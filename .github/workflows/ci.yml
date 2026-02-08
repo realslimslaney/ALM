@@ -7,11 +7,31 @@ on:
     branches: [main]
 
 jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Ruff lint
+        run: uv run ruff check .
+
+      - name: Ruff format check
+        run: uv run ruff format --check .
+
   test:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ["3.12"]
+        python-version: ["3.12", "3.13"]
 
     steps:
       - uses: actions/checkout@v4
@@ -25,11 +45,12 @@ jobs:
       - name: Install dependencies
         run: uv sync
 
-      - name: Ruff lint
-        run: uv run ruff check .
+      - name: Run tests with coverage
+        run: uv run pytest --cov=alm --cov-report=term-missing --cov-report=xml
 
-      - name: Ruff format check
-        run: uv run ruff format --check .
-
-      - name: Run tests
-        run: uv run pytest
+      - name: Upload coverage to Codecov
+        if: matrix.python-version == '3.12'
+        uses: codecov/codecov-action@v5
+        with:
+          files: coverage.xml
+          fail_ci_if_error: false
