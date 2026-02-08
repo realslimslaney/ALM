@@ -17,4 +17,3 @@ format:
 execute:
   echo: false
   warning: false
-  python: ".venv/Scripts/python.exe"
