@@ -1,6 +1,6 @@
 [project]
 name = "alm"
-version = "1.0.0"
+version = "1.1.0"
 description = "Educational toolkit demonstrating Asset-Liability Management (ALM) concepts for actuarial science students"
 readme = "README.md"
 authors = [
@@ -8,6 +8,7 @@ authors = [
 ]
 requires-python = ">=3.12"
 dependencies = [
+    "coloredlogs>=15.0.1",
     "fredapi>=0.5.2",
     "great-tables>=0.20.0",
     "jupyter>=1.1.1",
@@ -21,6 +22,7 @@ dependencies = [
 
 [dependency-groups]
 dev = [
+    "mkdocs-material>=9.0",
     "pre-commit>=4.0",
     "pytest>=8.0",
     "ruff>=0.9.0",

@@ -210,3 +210,9 @@ __marimo__/
 *.ipynb
 nul
 quarto/_freeze/*
+*_files
+quarto/**/mathjax.js
+mathjax.js
+
+# Other
+brennen-slaney.md
