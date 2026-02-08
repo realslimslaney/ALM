@@ -16,3 +16,4 @@ Step-by-step instructions to help you get started and accomplish common tasks.
 Technical descriptions of each major process and module.
 
 - [Project Structure](reference/project-structure.md)
+- [Fixed-Income Concepts](reference/fixed-income.md) — duration, convexity, DV01, immunization, KRD, IRR
