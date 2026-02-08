@@ -148,8 +148,7 @@ class SPIA:
         r = discount_rate / self.frequency
         cf = self.cashflows()
         return sum(
-            ep / (1 + r) ** t
-            for t, ep in zip(cf["period"], cf["expected_payout"], strict=True)
+            ep / (1 + r) ** t for t, ep in zip(cf["period"], cf["expected_payout"], strict=True)
         )
 
     def duration(self, discount_rate: float) -> float:
@@ -259,8 +258,7 @@ class WL:
         r = discount_rate / self.frequency
         cf = self.cashflows()
         return sum(
-            ncf / (1 + r) ** t
-            for t, ncf in zip(cf["period"], cf["net_cashflow"], strict=True)
+            ncf / (1 + r) ** t for t, ncf in zip(cf["period"], cf["net_cashflow"], strict=True)
         )
 
     def duration(self, discount_rate: float) -> float:
@@ -370,8 +368,7 @@ class Term:
         r = discount_rate / self.frequency
         cf = self.cashflows()
         return sum(
-            ncf / (1 + r) ** t
-            for t, ncf in zip(cf["period"], cf["net_cashflow"], strict=True)
+            ncf / (1 + r) ** t for t, ncf in zip(cf["period"], cf["net_cashflow"], strict=True)
         )
 
     def duration(self, discount_rate: float) -> float:

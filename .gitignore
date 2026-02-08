@@ -208,3 +208,5 @@ __marimo__/
 
 # Quarto helper files
 *.ipynb
+nul
+quarto/_freeze/*

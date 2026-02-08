@@ -28,5 +28,11 @@ Quarto (`.qmd`) files in `quarto/` are used to generate reports and graphs.
 ## Rendering
 
 ```bash
-uv run quarto render quarto/your_report.qmd
+just render-one your_report        # single report to HTML
+just render-one-pdf your_report    # single report to PDF
+just render                        # all reports to HTML
+just render-pdf                    # all reports to PDF
 ```
+
+> **PDF output** requires a LaTeX distribution. Install TinyTeX via Quarto:
+> `quarto install tinytex`
