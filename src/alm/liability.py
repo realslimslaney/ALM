@@ -111,6 +111,14 @@ class SPIA:
     def __post_init__(self) -> None:
         _validate_qx(self.qx)
 
+    def __repr__(self) -> str:
+        qx_summary = f"[{self.qx[0]:.4f}, ..., {self.qx[-1]:.4f}] ({len(self.qx)} rates)"
+        return (
+            f"SPIA(premium={self.premium:,.0f}, annual_payout={self.annual_payout:,.0f}, "
+            f"qx={qx_summary}, freq={self.frequency}, certain={self.certain_period}, "
+            f"age={self.age})"
+        )
+
     def cashflows(self) -> pl.DataFrame:
         """Expected liability cash flows (insurer outflows).
 
@@ -209,6 +217,13 @@ class WL:
 
     def __post_init__(self) -> None:
         _validate_qx(self.qx)
+
+    def __repr__(self) -> str:
+        qx_summary = f"[{self.qx[0]:.4f}, ..., {self.qx[-1]:.4f}] ({len(self.qx)} rates)"
+        return (
+            f"WL(face={self.face_value:,.0f}, premium={self.annual_premium:,.0f}, "
+            f"qx={qx_summary}, freq={self.frequency}, age={self.age})"
+        )
 
     def cashflows(self) -> pl.DataFrame:
         """Expected liability cash flows.
@@ -324,6 +339,13 @@ class Term:
     def __post_init__(self) -> None:
         _validate_qx(self.qx)
 
+    def __repr__(self) -> str:
+        qx_summary = f"[{self.qx[0]:.4f}, ..., {self.qx[-1]:.4f}] ({len(self.qx)} rates)"
+        return (
+            f"Term(face={self.face_value:,.0f}, premium={self.annual_premium:,.0f}, "
+            f"term={self.term}, qx={qx_summary}, freq={self.frequency}, age={self.age})"
+        )
+
     def cashflows(self) -> pl.DataFrame:
         """Expected liability cash flows over the policy term.
 
@@ -437,6 +459,14 @@ class FIA:
 
     def __post_init__(self) -> None:
         _validate_qx(self.qx)
+
+    def __repr__(self) -> str:
+        qx_summary = f"[{self.qx[0]:.4f}, ..., {self.qx[-1]:.4f}] ({len(self.qx)} rates)"
+        return (
+            f"FIA(premium={self.premium:,.0f}, term={self.term}, "
+            f"qx={qx_summary}, floor={self.floor:.1%}, cap={self.cap:.1%}, "
+            f"age={self.age})"
+        )
 
     def credited_rate(self, index_rate: float) -> float:
         """Apply participation rate, floor, and cap to a single index rate."""

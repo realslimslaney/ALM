@@ -1,5 +1,5 @@
 ---
-title: "UA ALM 202602"
+title: "ALM"
 format:
   html:
     toc: true
@@ -31,17 +31,24 @@ from pathlib import Path
 import sys
 
 sys.path.insert(0, str((Path.cwd().parent) / "src"))
-from alm.asset import Bond, Mortgage
+from alm.asset import Bond, Mortgage, PrivateCredit
 from alm.liability import SPIA, Term, WL, FIA, qx_from_table
-from alm.read import get_2012_iam_table, read_treasury_rates
-from alm.core import InterestRateSwap, dv01, dollar_convexity, immunize
+from alm.read import get_2012_iam_table, get_spread, read_treasury_rates, update_credit_spreads
+from alm.core import (
+    Block, InterestRateSwap, SAA,
+    default_saa, spia_saa, term_saa,
+    dv01, dollar_convexity, immunize,
+)
 from alm import plot
+from great_tables import GT, loc, style
 
 pdf_bool = os.environ.get("QUARTO_PROJECT_OUTPUT_FORMAT") == "pdf"
 if pdf_bool:
     pio.renderers.default = "png"
 else:
     pio.renderers.default = "notebook_connected+vscode"
+
+update_credit_spreads()
 
 today = date.today()
 print(f"DATE: {today}")
@@ -220,7 +227,7 @@ plot.bar_chart(
 
 ### Mortgage (MBS)
 
-A fully-amortising mortgage has a level total payment, but the split
+A fully-amortizing mortgage has a level total payment, but the split
 between interest and principal shifts over time.  Early payments are
 dominated by interest; later payments are dominated by principal
 repayment.
@@ -319,7 +326,7 @@ plot.bar_chart(
 ### All Asset Cashflows
 
 ```{python}
-#| label: fig-assets-combined
+# | label: fig-assets-combined
 all_asset_rows = []
 for name, inst in assets.items():
     cf = inst.cashflows()
@@ -333,7 +340,8 @@ for name, inst in assets.items():
 
     cf = (
         cf.with_columns(pl.col("year").cast(pl.Float64).ceil().cast(pl.Int32))
-        .group_by("year").agg(pl.col("cashflow").sum())
+        .group_by("year")
+        .agg(pl.col("cashflow").sum())
         .sort("year")
         .with_columns(pl.lit(name).alias("instrument"))
     )
@@ -342,10 +350,15 @@ for name, inst in assets.items():
 asset_cf_all = pl.concat(all_asset_rows)
 
 plot.bar_chart(
-    asset_cf_all, x="year", y="cashflow", color="instrument",
+    asset_cf_all,
+    x="year",
+    y="cashflow",
+    color="instrument",
     title="Asset Cashflows by Instrument (Annual)",
-    xlab="Year", ylab="Annual Cashflow",
-    yformat="$", barmode="stack",
+    xlab="Year",
+    ylab="Annual Cashflow",
+    yformat="$",
+    barmode="stack",
 ).show()
 ```
 
@@ -380,5 +393,215 @@ plot.bar_chart(
     title="Liability Cashflows by Instrument (Annual)",
     xlab="Year", ylab="Annual Net Cashflow",
     yformat="$", barmode="stack",
+).show()
+```
+
+
+## Block-Level Analysis
+
+A **Block** groups a single liability type with a matching asset portfolio
+built from a **Strategic Asset Allocation (SAA)**.  The `Block` class
+generates N individual policies with randomised ages and genders, then
+constructs assets to back them.
+
+### Strategic Asset Allocations
+
+Each liability type uses a tailored SAA — longer-duration blocks
+tilt toward government bonds, while shorter-duration blocks increase
+their mortgage allocation.
+
+```{python}
+#| label: tbl-saa
+saa_data = pl.DataFrame({
+    "Asset Class": ["Government Bonds", "Corporate Bonds", "Mortgages", "Private Credit"],
+    "Default": [0.40, 0.30, 0.20, 0.10],
+    "SPIA": [0.50, 0.30, 0.10, 0.10],
+    "Term": [0.30, 0.30, 0.30, 0.10],
+})
+
+(
+    GT(saa_data, rowname_col="Asset Class")
+    .tab_header(
+        title="Strategic Asset Allocations",
+        subtitle="Target weights by liability block type",
+    )
+    .fmt_percent(columns=["Default", "SPIA", "Term"], decimals=0)
+    .tab_source_note("Weights must sum to 100 %. Private credit capped at 10 %.")
+)
+```
+
+### SPIA Block
+
+500 single-premium immediate annuities, ages 65–80, backed by a
+long-duration SAA (50 % government bonds, 30 % corporate, 10 % mortgages,
+10 % private credit).
+
+```{python}
+#| label: fig-spia-block
+spia_block = Block(
+    liability_type="SPIA",
+    saa=spia_saa(),
+    total_liability_amount=5_000_000_000,
+    mortality_table=mortality,
+    age_range=(65, 80),
+    discount_rate=DISCOUNT_RATE,
+    n_policies=500,
+    seed=SEED,
+)
+spia_block.generate_policies()
+spia_block.generate_assets()
+spia_block.plot_cashflows().show()
+```
+
+### Term Block
+
+500 twenty-year term life policies, ages 35–55, backed by a shorter-
+duration SAA (40 % government bonds, 30 % corporate, 20 % mortgages,
+10 % private credit).
+
+```{python}
+#| label: fig-term-block
+term_block = Block(
+    liability_type="Term",
+    saa=default_saa(),
+    total_liability_amount=10_000_000_000,
+    mortality_table=mortality,
+    age_range=(35, 55),
+    discount_rate=DISCOUNT_RATE,
+    n_policies=500,
+    seed=SEED,
+)
+term_block.generate_policies()
+term_block.generate_assets()
+term_block.plot_cashflows().show()
+```
+
+## Yield Decomposition
+
+Fixed-income instruments earn different yields depending on the
+credit, liquidity, and structural risks embedded in the asset.  This
+section compares a representative **Treasury**, **Corporate**, and
+**Private Credit** bond side-by-side so the reader can see how each
+layer of spread adds to the total yield.
+
+```{python}
+#| label: yield-decomp-setup
+# Representative 5-year instruments
+corp_spread = get_spread("A", 5)
+
+treasury_5yr = Bond(
+    face_value=100_000_000, coupon_rate=DISCOUNT_RATE, maturity=5,
+)
+corporate_5yr = Bond(
+    face_value=100_000_000, coupon_rate=DISCOUNT_RATE + corp_spread, maturity=5,
+    rating="A", credit_spread=corp_spread,
+)
+pc_5yr = PrivateCredit(
+    face_value=100_000_000, maturity=5,
+    risk_free_rate=DISCOUNT_RATE, credit_spread=0.015,
+    illiquidity_spread=0.020, other_spread=0.005,
+)
+```
+
+### Yield Composition
+
+```{python}
+#| label: tbl-yield-decomp
+yield_data = pl.DataFrame({
+    "Component": [
+        "Risk-Free Rate", "Credit Spread",
+        "Illiquidity Spread", "Other Spread", "Total Yield",
+    ],
+    "5yr Treasury": [DISCOUNT_RATE, 0.0, 0.0, 0.0, DISCOUNT_RATE],
+    "5yr Corporate (A)": [
+        DISCOUNT_RATE, corp_spread, 0.0, 0.0, DISCOUNT_RATE + corp_spread,
+    ],
+    "5yr Private Credit": [
+        pc_5yr.risk_free_rate, pc_5yr.credit_spread,
+        pc_5yr.illiquidity_spread, pc_5yr.other_spread, pc_5yr.total_yield,
+    ],
+})
+
+cols = ["5yr Treasury", "5yr Corporate (A)", "5yr Private Credit"]
+
+(
+    GT(yield_data, rowname_col="Component")
+    .tab_header(
+        title="Yield Decomposition",
+        subtitle="5-year instruments compared side by side",
+    )
+    .fmt_percent(columns=cols, decimals=2)
+    .tab_style(
+        style=style.text(weight="bold"),
+        locations=loc.body(rows=[4]),
+    )
+    .tab_source_note(
+        "Treasury = risk-free only. Corporate adds credit spread. "
+        "Private credit adds illiquidity and complexity premia."
+    )
+)
+```
+
+### Risk Metrics
+
+```{python}
+#| label: tbl-risk-metrics
+metrics_data = pl.DataFrame({
+    "Metric": ["Present Value", "Duration (yrs)", "Convexity", "DV01"],
+    "5yr Treasury": [
+        treasury_5yr.present_value(DISCOUNT_RATE),
+        treasury_5yr.duration(DISCOUNT_RATE),
+        treasury_5yr.convexity(DISCOUNT_RATE),
+        dv01(treasury_5yr.present_value, DISCOUNT_RATE),
+    ],
+    "5yr Corporate (A)": [
+        corporate_5yr.present_value(DISCOUNT_RATE),
+        corporate_5yr.duration(DISCOUNT_RATE),
+        corporate_5yr.convexity(DISCOUNT_RATE),
+        dv01(corporate_5yr.present_value, DISCOUNT_RATE),
+    ],
+    "5yr Private Credit": [
+        pc_5yr.present_value(DISCOUNT_RATE),
+        pc_5yr.duration(DISCOUNT_RATE),
+        pc_5yr.convexity(DISCOUNT_RATE),
+        dv01(lambda r: pc_5yr.present_value(r), DISCOUNT_RATE),
+    ],
+})
+
+(
+    GT(metrics_data, rowname_col="Metric")
+    .tab_header(title="Risk Metrics — 5-Year Instruments")
+    .fmt_currency(columns=cols, rows=[0, 3], decimals=0)
+    .fmt_number(columns=cols, rows=[1, 2], decimals=2)
+    .tab_source_note(
+        "PV discounted at the flat rate. "
+        "PC present value uses risk-free rate, capturing the illiquidity premium."
+    )
+)
+```
+
+### Historical Yield Comparison
+
+Adding the assumed spreads to the Treasury 5Y rate shows how
+each instrument's yield moves over time.
+
+```{python}
+#| label: fig-yield-comparison
+pc_total_spread = (
+    pc_5yr.credit_spread + pc_5yr.illiquidity_spread + pc_5yr.other_spread
+)
+
+yields = treasury.select(
+    "date",
+    pl.col("5Y").alias("Treasury"),
+    (pl.col("5Y") + corp_spread).alias("Corporate (A)"),
+    (pl.col("5Y") + pc_total_spread).alias("Private Credit"),
+).drop_nulls()
+
+plot.line_chart(
+    yields, x="date", y=["Treasury", "Corporate (A)", "Private Credit"],
+    title="Historical Yield Comparison — 5-Year Instruments",
+    xlab="", ylab="Yield",
+    yformat="%",
 ).show()
 ```

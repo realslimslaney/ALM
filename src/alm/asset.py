@@ -1,4 +1,6 @@
-"""Plain-vanilla fixed-income asset models."""
+"""Fixed-income asset models."""
+
+from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
@@ -22,12 +24,18 @@ class Bond:
         Years to maturity.
     frequency : int
         Coupon payments per year (default 2 = semi-annual).
+    rating : str or None
+        Optional credit rating label (e.g. "AA", "BBB").
+    credit_spread : float
+        Credit spread component of the coupon rate, for reporting.
     """
 
     face_value: float
     coupon_rate: float
     maturity: int
     frequency: int = 2
+    rating: str | None = None
+    credit_spread: float = 0.0
 
     @property
     def n_periods(self) -> int:
@@ -99,7 +107,7 @@ class Bond:
 
 @dataclass
 class Mortgage:
-    """A plain-vanilla fixed-rate fully-amortising mortgage.
+    """A plain-vanilla fixed-rate fully-amortizing mortgage.
 
     Parameters
     ----------
@@ -208,5 +216,123 @@ class Mortgage:
         conv = sum(
             t * (t + 1) * pmt / (1 + r) ** (t + 2)
             for t, pmt in zip(cf["period"], cf["payment"], strict=True)
+        )
+        return conv / (pv * self.frequency**2)
+
+
+@dataclass
+class PrivateCredit:
+    """Private credit instrument with explicit yield decomposition.
+
+    A bullet bond-like instrument where the total yield is decomposed
+    into risk-free rate, credit spread, illiquidity spread, and other
+    spread.  Present value is discounted at the risk-free rate by
+    default, reflecting the illiquidity premium as excess income.
+
+    Parameters
+    ----------
+    face_value : float
+        Par / face value.
+    maturity : int
+        Years to maturity.
+    risk_free_rate : float
+        Risk-free rate component (decimal).
+    credit_spread : float
+        Credit spread component (decimal).
+    illiquidity_spread : float
+        Illiquidity premium component (decimal).
+    other_spread : float
+        Any other spread component (decimal).
+    frequency : int
+        Coupon payments per year (default 2 = semi-annual).
+    rating : str or None
+        Optional credit rating label.
+    """
+
+    face_value: float
+    maturity: int
+    risk_free_rate: float
+    credit_spread: float
+    illiquidity_spread: float
+    other_spread: float
+    frequency: int = 2
+    rating: str | None = None
+
+    @property
+    def total_yield(self) -> float:
+        """Total yield = sum of all spread components."""
+        return (
+            self.risk_free_rate + self.credit_spread + self.illiquidity_spread + self.other_spread
+        )
+
+    @property
+    def n_periods(self) -> int:
+        return self.maturity * self.frequency
+
+    @property
+    def coupon(self) -> float:
+        """Per-period coupon based on total yield."""
+        return self.face_value * self.total_yield / self.frequency
+
+    def cashflows(self) -> pl.DataFrame:
+        """Return the cash-flow schedule.
+
+        Columns: period, coupon, principal, total.
+        """
+        n = self.n_periods
+        c = self.coupon
+
+        periods = list(range(1, n + 1))
+        coupons = [c] * n
+        principals = [0.0] * (n - 1) + [self.face_value]
+        totals = [c + p for c, p in zip(coupons, principals, strict=True)]
+
+        return pl.DataFrame(
+            {
+                "period": periods,
+                "coupon": coupons,
+                "principal": principals,
+                "total": totals,
+            }
+        )
+
+    def present_value(self, discount_rate: float | None = None) -> float:
+        """PV discounted at the risk-free rate (default) or a given rate.
+
+        When discount_rate is None, uses self.risk_free_rate.
+        Discounting at the risk-free rate while earning the total yield
+        reflects the illiquidity premium as excess value.
+        """
+        rate = discount_rate if discount_rate is not None else self.risk_free_rate
+        r = rate / self.frequency
+        cf = self.cashflows()
+        pv = sum(total / (1 + r) ** t for t, total in zip(cf["period"], cf["total"], strict=True))
+        if pv < 0:
+            logger.warning("PrivateCredit PV is negative (%.2f)", pv)
+        return pv
+
+    def duration(self, discount_rate: float | None = None) -> float:
+        """Macaulay duration in years."""
+        rate = discount_rate if discount_rate is not None else self.risk_free_rate
+        r = rate / self.frequency
+        cf = self.cashflows()
+        pv = self.present_value(rate)
+
+        weighted = sum(
+            (t / self.frequency) * total / (1 + r) ** t
+            for t, total in zip(cf["period"], cf["total"], strict=True)
+        )
+        return weighted / pv
+
+    def convexity(self, discount_rate: float | None = None) -> float:
+        """Convexity (in years squared)."""
+        rate = discount_rate if discount_rate is not None else self.risk_free_rate
+        r = rate / self.frequency
+        cf = self.cashflows()
+        pv = self.present_value(rate)
+
+        conv = sum(
+            t * (t + 1) * total / (1 + r) ** (t + 2)
+            for t, total in zip(cf["period"], cf["total"], strict=True)
         )
         return conv / (pv * self.frequency**2)
