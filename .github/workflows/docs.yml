@@ -6,6 +6,7 @@ on:
     paths:
       - "docs/**"
       - "mkdocs.yml"
+      - "src/alm/**"
 
 permissions:
   contents: read
@@ -30,6 +31,15 @@ jobs:
 
       - name: Install dependencies
         run: uv sync --group dev
+
+      - name: Install Quarto
+        uses: quarto-dev/quarto-actions/setup@v2
+
+      - name: Render Quarto reference pages
+        run: |
+          for f in docs/reference/ref-*.qmd; do
+            uv run quarto render "$f" --to html
+          done
 
       - name: Build docs
         run: uv run mkdocs build --strict

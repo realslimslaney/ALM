@@ -1,0 +1,3 @@
+<meta http-equiv="refresh" content="0;url=../ref-whole-life.html">
+
+Redirecting to [Whole Life Reference](ref-whole-life.html)...

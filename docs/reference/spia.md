@@ -1,0 +1,3 @@
+<meta http-equiv="refresh" content="0;url=../ref-spia.html">
+
+Redirecting to [SPIA Reference](ref-spia.html)...

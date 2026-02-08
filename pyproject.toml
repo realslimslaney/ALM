@@ -1,6 +1,6 @@
 [project]
 name = "alm"
-version = "1.1.0"
+version = "1.1.1"
 description = "Educational toolkit demonstrating Asset-Liability Management (ALM) concepts for actuarial science students"
 readme = "README.md"
 authors = [

@@ -1,0 +1,3 @@
+<meta http-equiv="refresh" content="0;url=../ref-term-life.html">
+
+Redirecting to [Term Life Reference](ref-term-life.html)...
