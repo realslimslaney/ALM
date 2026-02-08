@@ -1,11 +1,139 @@
-"""Core ALM instruments for duration management."""
+"""Core ALM instruments and hedging utilities."""
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import polars as pl
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Portfolio-level hedging utilities
+# ---------------------------------------------------------------------------
+
+
+def dv01(pv_func: Callable[[float], float], rate: float, bump: float = 0.0001) -> float:
+    """Dollar value of a one-basis-point parallel rate shift.
+
+    Parameters
+    ----------
+    pv_func : Callable[[float], float]
+        A function that returns present value given an annual discount rate.
+        For instruments whose PV depends on additional arguments (e.g. a swap
+        needing floating rates), use ``functools.partial`` or a lambda to
+        create a single-argument wrapper.
+    rate : float
+        Current annual discount rate as a decimal.
+    bump : float
+        Rate perturbation in decimal (default 0.0001 = 1 bp).
+
+    Returns
+    -------
+    float
+        Positive means the position gains value when rates fall by 1 bp.
+    """
+    return (pv_func(rate - bump) - pv_func(rate + bump)) / 2
+
+
+def dollar_convexity(
+    pv_func: Callable[[float], float], rate: float, bump: float = 0.0001
+) -> float:
+    """Dollar convexity via central finite difference.
+
+    Measures how DV01 itself changes as rates move — the second-order
+    price sensitivity.  Used together with :func:`dv01` for convexity
+    hedging.
+
+    Parameters
+    ----------
+    pv_func : Callable[[float], float]
+        Present-value function (same contract as :func:`dv01`).
+    rate : float
+        Current annual discount rate as a decimal.
+    bump : float
+        Rate perturbation in decimal (default 0.0001 = 1 bp).
+
+    Returns
+    -------
+    float
+        Dollar convexity ≈ d²PV / dy².  Positive for plain option-free
+        fixed-income instruments.
+    """
+    return (pv_func(rate + bump) + pv_func(rate - bump) - 2 * pv_func(rate)) / bump**2
+
+
+def immunize(
+    dd_gap: float,
+    dc_gap: float,
+    dd_per_unit_1: float,
+    dc_per_unit_1: float,
+    dd_per_unit_2: float,
+    dc_per_unit_2: float,
+) -> tuple[float, float]:
+    """Solve for notionals of two hedging instruments to close both
+    duration and convexity gaps simultaneously.
+
+    Sets up and solves the 2×2 linear system:
+
+    .. math::
+
+        n_1 \\cdot dd_1 + n_2 \\cdot dd_2 = \\Delta DD
+
+        n_1 \\cdot dc_1 + n_2 \\cdot dc_2 = \\Delta DC
+
+    where *ΔDD* and *ΔDC* are the dollar-duration and dollar-convexity
+    gaps that the hedge must fill.
+
+    Parameters
+    ----------
+    dd_gap : float
+        Dollar-duration gap to close (DV01_liabilities − DV01_assets).
+    dc_gap : float
+        Dollar-convexity gap to close
+        (dollar_convexity_liabilities − dollar_convexity_assets).
+    dd_per_unit_1 : float
+        DV01 of hedging instrument 1 per unit notional.
+    dc_per_unit_1 : float
+        Dollar convexity of hedging instrument 1 per unit notional.
+    dd_per_unit_2 : float
+        DV01 of hedging instrument 2 per unit notional.
+    dc_per_unit_2 : float
+        Dollar convexity of hedging instrument 2 per unit notional.
+
+    Returns
+    -------
+    tuple[float, float]
+        ``(notional_1, notional_2)`` — required notionals for each
+        hedging instrument.
+
+    Raises
+    ------
+    ValueError
+        If the two instruments have linearly dependent sensitivities
+        (determinant ≈ 0), meaning they cannot independently target both
+        duration and convexity.
+
+    Examples
+    --------
+    >>> # 5-year and 10-year swaps closing a duration + convexity gap
+    >>> n1, n2 = immunize(
+    ...     dd_gap=500, dc_gap=80_000,
+    ...     dd_per_unit_1=4.0, dc_per_unit_1=20.0,
+    ...     dd_per_unit_2=8.0, dc_per_unit_2=90.0,
+    ... )
+    """
+    det = dd_per_unit_1 * dc_per_unit_2 - dd_per_unit_2 * dc_per_unit_1
+    if abs(det) < 1e-15:
+        raise ValueError(
+            "Hedging instruments have linearly dependent sensitivities; "
+            "cannot solve for both duration and convexity. "
+            "Choose instruments with different duration/convexity profiles."
+        )
+    n1 = (dd_gap * dc_per_unit_2 - dc_gap * dd_per_unit_2) / det
+    n2 = (dd_per_unit_1 * dc_gap - dc_per_unit_1 * dd_gap) / det
+    return n1, n2
 
 
 # ---------------------------------------------------------------------------
