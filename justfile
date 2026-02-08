@@ -24,6 +24,16 @@ lint:
 format:
     uv run ruff format .
 
+# --- Documentation ---
+
+# Serve docs locally with live reload
+docs-serve:
+    uv run mkdocs serve
+
+# Build docs site to site/
+docs-build:
+    uv run mkdocs build --strict
+
 # --- Quarto rendering ---
 
 # Render all QMD files to HTML
