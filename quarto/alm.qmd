@@ -19,38 +19,366 @@ format:
     fontsize: 11pt
 ---
 
-```{python imports}
-from datetime import datetime, date
+```{python}
+# | label: setup
+from datetime import date
+import numpy as np
 import polars as pl
-import yfinance as yf
-from great_tables import GT, style, loc
-import plotly.express as px
 import plotly.graph_objects as go
 import plotly.io as pio
 import os
-
 from pathlib import Path
 import sys
 
 sys.path.insert(0, str((Path.cwd().parent) / "src"))
-from alm import core, read, utils
+from alm.asset import Bond, Mortgage
+from alm.liability import SPIA, Term, WL, FIA, qx_from_table
+from alm.read import get_2012_iam_table, read_treasury_rates
+from alm.core import InterestRateSwap, dv01, dollar_convexity, immunize
+from alm import plot
 
 pdf_bool = os.environ.get("QUARTO_PROJECT_OUTPUT_FORMAT") == "pdf"
 if pdf_bool:
-    pio.renderers.default = "png"  # or "svg"
+    pio.renderers.default = "png"
 else:
     pio.renderers.default = "notebook_connected+vscode"
 
 today = date.today()
-
 print(f"DATE: {today}")
 print("AUTHOR: Brennen L. Slaney, FSA, Notary Public (GitHub: @realslimslaney)")
 ```
 
 
-## ALM
+## Inputs
 
-This chapter describes how to use ALM (Application Lifecycle Management) features in Quarto. ALM features help you manage the development, deployment, and maintenance of your Quarto projects effectively.
+All model parameters live in this single code block.
+Adjust values here to explore different portfolio compositions and market
+conditions.
 
 ```{python}
+# | label: inputs
+
+# ── Global Parameters ─────────────────────────────────────────
+DISCOUNT_RATE = 0.04  # flat annual discount rate
+SEED = 42  # reproducibility
+rng = np.random.default_rng(SEED)
+
+# ── Mortality Table (SOA IAM 2012 Basic) ──────────────────────
+mortality = get_2012_iam_table()  # combined male + female
+
+# Simulated equity-index annual returns for FIA crediting
+INDEX_RATES = rng.normal(0.05, 0.10, size=20).tolist()
+
+# ── Strategic Asset Allocation ($10 B total face / principal) ─
+assets = {
+    "3yr Treasury": Bond(face_value=2_000_000_000, coupon_rate=0.030, maturity=3),
+    "5yr Corporate": Bond(face_value=1_500_000_000, coupon_rate=0.035, maturity=5),
+    "10yr Corporate": Bond(face_value=1_500_000_000, coupon_rate=0.040, maturity=10),
+    "15yr MBS": Mortgage(principal=2_000_000_000, annual_rate=0.055, term=15),
+    "30yr MBS": Mortgage(principal=3_000_000_000, annual_rate=0.060, term=30),
+}
+
+# ── Liability Portfolio ───────────────────────────────────────
+liabilities = {
+    "SPIA (Life Only)": SPIA(
+        premium=2_000_000_000,
+        annual_payout=150_000_000,
+        qx=qx_from_table(mortality, 65, "male"),
+        age=65,
+    ),
+    "SPIA (10yr Certain)": SPIA(
+        premium=1_000_000_000,
+        annual_payout=80_000_000,
+        qx=qx_from_table(mortality, 70, "female"),
+        age=70,
+        certain_period=10,
+    ),
+    "20yr Term Life": Term(
+        face_value=5_000_000_000,
+        annual_premium=25_000_000,
+        term=20,
+        qx=qx_from_table(mortality, 40, "male"),
+        age=40,
+    ),
+    "Whole Life": WL(
+        face_value=2_000_000_000,
+        annual_premium=30_000_000,
+        qx=qx_from_table(mortality, 35, "female"),
+        age=35,
+    ),
+    "FIA (10yr)": FIA(
+        premium=50_000_000,
+        term=10,
+        qx=qx_from_table(mortality, 55, "male"),
+        age=55,
+        floor=0.01,
+        cap=0.06,
+    ),
+}
+```
+
+
+## Market Environment
+
+US Treasury constant-maturity rates from FRED — the benchmark yield
+curve that drives asset pricing and liability discounting.
+
+```{python}
+#| label: fig-treasury-rates
+ALL_TENORS = ["1M", "3M", "6M", "1Y", "2Y", "3Y", "5Y", "7Y", "10Y", "20Y", "30Y"]
+treasury = read_treasury_rates(start="2020-01-01", tenors=ALL_TENORS).with_columns(
+    [pl.col(t) / 100 for t in ALL_TENORS]      # FRED returns %; convert to decimal
+)
+
+plot.line_chart(
+    treasury, x="date", y=["1Y", "10Y", "30Y"],
+    title="US Treasury Rates (FRED)",
+    xlab="", ylab="Rate",
+    yformat="%",
+).show()
+```
+
+### Current Yield Curve
+
+The most recent available rates across all maturities, with spline
+interpolation to visualise the full term structure.
+
+```{python}
+# | label: fig-yield-curve
+TENOR_YEARS = {
+    "1M": 1 / 12,
+    "3M": 0.25,
+    "6M": 0.5,
+    "1Y": 1,
+    "2Y": 2,
+    "3Y": 3,
+    "5Y": 5,
+    "7Y": 7,
+    "10Y": 10,
+    "20Y": 20,
+    "30Y": 30,
+}
+
+latest = treasury.drop_nulls().sort("date", descending=True).head(1)
+curve_date = str(latest["date"][0])[:10]  # date only, no timestamp
+
+maturities = [TENOR_YEARS[t] for t in ALL_TENORS]
+rates = [latest[t][0] for t in ALL_TENORS]
+
+TICK_TENORS = ["1M", "1Y", "2Y", "5Y", "10Y", "20Y", "30Y"]
+
+fig = go.Figure()
+fig.add_trace(
+    go.Scatter(
+        x=maturities,
+        y=rates,
+        mode="lines+markers",
+        line=dict(color=plot.PALETTE[0], shape="spline", smoothing=1.3),
+        marker=dict(color=plot.PALETTE[1], size=9),
+        text=ALL_TENORS,
+        hovertemplate="%{text}: %{y:.2%}<extra></extra>",
+        showlegend=False,
+    )
+)
+fig.update_layout(
+    template="plotly_white",
+    title=f"US Treasury Yield Curve ({curve_date})",
+    xaxis_title="Maturity (Years)",
+    yaxis_title="Rate",
+    margin=dict(l=60, r=30, t=60, b=50),
+)
+fig.update_xaxes(
+    tickvals=[TENOR_YEARS[t] for t in TICK_TENORS],
+    ticktext=TICK_TENORS,
+)
+fig.update_yaxes(tickformat=".2%", hoverformat=".2%")
+fig.show()
+```
+
+
+## Asset Cashflow Profiles
+
+### Bond
+
+A bullet bond pays level coupons with the full principal returned at
+maturity — creating the characteristic "hockey-stick" pattern.
+
+```{python}
+#| label: fig-bond
+inst = assets["10yr Corporate"]
+bond_cf = inst.cashflows().with_columns(
+    (pl.col("period") / inst.frequency).alias("year")
+)
+
+plot.bar_chart(
+    bond_cf, x="year", y=["coupon", "principal"],
+    title="10yr Corporate Bond — Cashflows",
+    xlab="Year", ylab="Cashflow",
+    yformat="$", barmode="stack",
+).show()
+```
+
+### Mortgage (MBS)
+
+A fully-amortising mortgage has a level total payment, but the split
+between interest and principal shifts over time.  Early payments are
+dominated by interest; later payments are dominated by principal
+repayment.
+
+```{python}
+#| label: fig-mortgage
+inst = assets["30yr MBS"]
+mtg_cf = inst.cashflows().with_columns(
+    (pl.col("period") / inst.frequency).alias("year")
+)
+
+plot.line_chart(
+    mtg_cf, x="year", y=["interest", "principal"],
+    title="30yr Mortgage — Interest vs. Principal",
+    xlab="Year", ylab="Monthly Payment",
+    yformat="$",
+).show()
+```
+
+
+## Liability Cashflow Profiles
+
+### SPIA (Single Premium Immediate Annuity)
+
+Expected payouts decline over time as the survival probability decreases.
+The insurer's obligation shrinks as fewer annuitants remain alive.
+
+```{python}
+#| label: fig-spia
+spia_cf = liabilities["SPIA (Life Only)"].cashflows()
+
+plot.line_chart(
+    spia_cf, x="year", y="expected_payout",
+    title="SPIA (Life Only) — Expected Monthly Payouts",
+    xlab="Year", ylab="Expected Payout",
+    yformat="$",
+).show()
+```
+
+### Term Life Insurance
+
+Premium income declines as fewer policyholders survive to pay.
+Expected death benefits reflect the underlying mortality curve.
+
+```{python}
+#| label: fig-term
+term_cf = liabilities["20yr Term Life"].cashflows()
+
+plot.line_chart(
+    term_cf, x="year", y=["expected_premium", "expected_benefit"],
+    title="20yr Term Life — Premiums vs. Expected Benefits",
+    xlab="Year", ylab="Monthly Amount",
+    yformat="$",
+).show()
+```
+
+### Whole Life Insurance
+
+Whole life covers the insured's entire lifetime.  Premiums are received
+as long as the insured survives; the death benefit is paid whenever death
+occurs.
+
+```{python}
+#| label: fig-wl
+wl_cf = liabilities["Whole Life"].cashflows()
+
+plot.line_chart(
+    wl_cf, x="year", y=["expected_premium", "expected_benefit"],
+    title="Whole Life — Premiums vs. Expected Benefits",
+    xlab="Year", ylab="Monthly Amount",
+    yformat="$",
+).show()
+```
+
+### FIA (Fixed Indexed Annuity)
+
+The FIA credits returns linked to an external index, subject to a floor
+and cap.  Expected outflows include death benefits during the
+accumulation period and a large maturity benefit at term end.
+
+```{python}
+#| label: fig-fia
+fia_cf = liabilities["FIA (10yr)"].cashflows(INDEX_RATES)
+
+plot.bar_chart(
+    fia_cf, x="year", y=["expected_death_benefit", "expected_maturity_benefit"],
+    title="FIA (10yr) — Expected Benefits",
+    xlab="Year", ylab="Expected Benefit",
+    yformat="$", barmode="stack",
+).show()
+```
+
+
+## Combined Cashflow Views
+
+### All Asset Cashflows
+
+```{python}
+#| label: fig-assets-combined
+all_asset_rows = []
+for name, inst in assets.items():
+    cf = inst.cashflows()
+    freq = inst.frequency
+    cf = cf.with_columns((pl.col("period") / freq).alias("year"))
+
+    if isinstance(inst, Bond):
+        cf = cf.select("year", pl.col("total").alias("cashflow"))
+    else:
+        cf = cf.select("year", pl.col("payment").alias("cashflow"))
+
+    cf = (
+        cf.with_columns(pl.col("year").cast(pl.Float64).ceil().cast(pl.Int32))
+        .group_by("year").agg(pl.col("cashflow").sum())
+        .sort("year")
+        .with_columns(pl.lit(name).alias("instrument"))
+    )
+    all_asset_rows.append(cf)
+
+asset_cf_all = pl.concat(all_asset_rows)
+
+plot.bar_chart(
+    asset_cf_all, x="year", y="cashflow", color="instrument",
+    title="Asset Cashflows by Instrument (Annual)",
+    xlab="Year", ylab="Annual Cashflow",
+    yformat="$", barmode="stack",
+).show()
+```
+
+### All Liability Cashflows
+
+```{python}
+#| label: fig-liabilities-combined
+all_liab_rows = []
+for name, inst in liabilities.items():
+    if isinstance(inst, FIA):
+        cf = inst.cashflows(INDEX_RATES)
+    else:
+        cf = inst.cashflows()
+
+    if isinstance(inst, SPIA):
+        cf = cf.select("year", pl.col("expected_payout").alias("cashflow"))
+    else:
+        cf = cf.select("year", pl.col("net_cashflow").alias("cashflow"))
+
+    cf = (
+        cf.with_columns(pl.col("year").cast(pl.Float64).ceil().cast(pl.Int32))
+        .group_by("year").agg(pl.col("cashflow").sum())
+        .sort("year")
+        .with_columns(pl.lit(name).alias("instrument"))
+    )
+    all_liab_rows.append(cf)
+
+liab_cf_all = pl.concat(all_liab_rows)
+
+plot.bar_chart(
+    liab_cf_all, x="year", y="cashflow", color="instrument",
+    title="Liability Cashflows by Instrument (Annual)",
+    xlab="Year", ylab="Annual Net Cashflow",
+    yformat="$", barmode="stack",
+).show()
 ```
