@@ -35,7 +35,7 @@ import sys
 from great_tables import GT, style, loc
 
 sys.path.insert(0, str((Path.cwd().parent) / "src"))
-from alm.asset import Bond, Mortgage, PrivateCredit
+from alm.asset import Bond, PrivateCredit
 from alm.liability import SPIA, Term, WL, FIA, qx_from_table
 from alm.read import get_2012_iam_table, read_treasury_rates, update_credit_spreads
 from alm.core import (
@@ -47,6 +47,7 @@ from alm.core import (
     dv01,
     dollar_convexity,
     immunize,
+    irr,
 )
 from alm import plot
 
@@ -92,16 +93,26 @@ logger.info("SOURCE: https://github.com/realslimslaney/ALM")
 
 # 2. Building Blocks of ALM
 
-How are assets and liabilities measured, and why do actuaries care?
+## Insurance Company Balance Sheet
+An insurance company's balance sheet is made up of three key components:
+
+1. **Assets** — The investments the company holds (bonds, mortgages, private credit)
+
+2. **Liabilities** — The obligations the company owes to policyholders (annuities, life insurance)
+
+3. **Equity (Surplus)** — The residual value that belongs to shareholders after settling liabilities with assets
+
+![Balance Sheet](../images/balance_sheet.png){width=80%}
 
 ## Assets
 
 **Assets are the money you have.** Most of it is invested in safe, predictable instruments:
 
-- Treasuries
+- Treasuries (government bonds — safe, liquid, benchmark yield)
 - Highly rated corporate bonds
 - Mortgage-Backed Securities
-- Not much Bitcoin
+- Private credit (higher yield for illiquidity & credit risk)
+
 
 The goal is **positive expected yield with lower variance**. Regulators enforce capital requirements and "score" the safety of assets. Investment teams manage the portfolio, but actuaries are often involved.
 
@@ -114,11 +125,9 @@ from alm.read import read_treasury_rates
 rates = read_treasury_rates()
 
 assets = [
-    Bond(face_value=15_000_000, coupon_rate=0.0368, maturity=1, frequency=2, rating="AAA"),
-    Bond(face_value=10_000_000, coupon_rate=0.0349, maturity=1, frequency=2, rating="AAA"),
-    Bond(face_value=25_000_000, coupon_rate=0.0398, maturity=7, frequency=2, rating="AAA"),
+    Bond(face_value=8_000_000, coupon_rate=0.0390, maturity=2, frequency=2, rating="AAA"),
     Bond(
-        face_value=15_000_000,
+        face_value=10_000_000,
         coupon_rate=0.0425,
         maturity=5,
         frequency=2,
@@ -126,39 +135,64 @@ assets = [
         credit_spread=0.0027,
     ),
     PrivateCredit(
-        face_value=10_000_000,
-        maturity=20,
+        face_value=5_000_000,
+        maturity=7,
         risk_free_rate=0.04,
         credit_spread=0.03,
-        illiquidity_spread=0.025,
-        other_spread=0.01,
+        illiquidity_spread=0.020,
+        other_spread=0.005,
         rating="BB",
     ),
+    Bond(face_value=15_000_000, coupon_rate=0.0400, maturity=10, frequency=2, rating="AAA"),
+    Bond(face_value=8_000_000, coupon_rate=0.0420, maturity=20, frequency=2, rating="AA"),
 ]
+
+# Private credit: low stated coupon, yield captured in purchase price discount
+pc_display_coupon = 0.015
+pc_purchase_price = Bond(
+    face_value=assets[2].face_value,
+    coupon_rate=pc_display_coupon,
+    maturity=assets[2].maturity,
+    frequency=assets[2].frequency,
+).present_value(assets[2].total_yield)
 
 asset_summary = pl.DataFrame(
     {
         "instrument": [
-            "$15M UST 1Y",
-            "$10M UST 1Y",
-            "$25M UST 7Y",
-            "$15M Corp A 5Y",
-            "$10M PC BB 20Y",
+            "$8M UST 2Y",
+            "$10M Corp A 5Y",
+            "$5M PC BB 7Y",
+            "$15M UST 10Y",
+            "$8M AA 20Y",
         ],
         "face_value": [a.face_value for a in assets],
+        "purchase_price": [
+            assets[0].present_value(DISCOUNT_RATE),
+            assets[1].present_value(DISCOUNT_RATE),
+            pc_purchase_price,
+            assets[3].present_value(DISCOUNT_RATE),
+            assets[4].present_value(DISCOUNT_RATE),
+        ],
         "coupon_rate": [
             assets[0].coupon_rate,
             assets[1].coupon_rate,
-            assets[2].coupon_rate,
+            pc_display_coupon,
             assets[3].coupon_rate,
-            assets[4].total_yield,
+            assets[4].coupon_rate,
         ],
-        "maturity": [1, 1, 7, 5, 20],
+        "irr": [
+            assets[0].coupon_rate,
+            assets[1].coupon_rate,
+            assets[2].total_yield,
+            assets[3].coupon_rate,
+            assets[4].coupon_rate,
+        ],
+        "maturity": [2, 5, 7, 10, 20],
     }
 )
-styled_gt(asset_summary, "Sample Asset Portfolio").fmt_currency("face_value", decimals=0).fmt_percent(
-    "coupon_rate", decimals=2
-).fmt_number("maturity", decimals=0)
+styled_gt(asset_summary, "Sample Asset Portfolio").fmt_currency(
+    ["face_value", "purchase_price"], decimals=0
+).fmt_percent(["coupon_rate", "irr"], decimals=2).fmt_number("maturity", decimals=0)
 ```
 
 ```{python}
@@ -188,23 +222,27 @@ fig.show()
 # | label: liabilities
 mortality = get_2012_iam_table()
 
-# Whole Life policy: $1M face value, net level premium via equivalence principle
-qx_wl = qx_from_table(mortality, age=40, sex="male")
-wl = WL.from_face(face_value=1_000_000, qx=qx_wl, discount_rate=DISCOUNT_RATE, age=40)
+# Whole Life block: $10M face value, net level premium via equivalence principle
+qx_wl = qx_from_table(mortality, age=45, sex="male")
+wl = WL.from_face(face_value=10_000_000, qx=qx_wl, discount_rate=DISCOUNT_RATE, age=45)
 
-# SPIA: $10k/month annuity, fair single premium = PV of expected payouts
+# SPIA block: $3M annual payout, fair single premium = PV of expected payouts
 qx_spia = qx_from_table(mortality, age=65, sex="female")
-spia = SPIA.from_payout(annual_payout=120_000, qx=qx_spia, discount_rate=DISCOUNT_RATE, age=65)
+spia = SPIA.from_payout(annual_payout=3_000_000, qx=qx_spia, discount_rate=DISCOUNT_RATE, age=65)
 
-liab_summary = pl.DataFrame({
-    "product": ["Whole Life", "SPIA"],
-    "amount": [wl.face_value, spia.annual_payout],
-    "amount_label": ["face value", "annual payout"],
-    "premium": [wl.annual_premium, spia.premium],
-    "premium_label": ["annual", "single"],
-    "age": [wl.age, spia.age],
-})
-styled_gt(liab_summary, "Liability Summary").fmt_currency(["amount", "premium"], decimals=0).fmt_number("age", decimals=0)
+liab_summary = pl.DataFrame(
+    {
+        "product": ["Whole Life", "SPIA"],
+        "amount": [wl.face_value, spia.annual_payout],
+        "amount_label": ["face value", "annual payout"],
+        "premium": [wl.annual_premium, spia.premium],
+        "premium_label": ["annual", "single"],
+        "age": [wl.age, spia.age],
+    }
+)
+styled_gt(liab_summary, "Liability Summary").fmt_currency(
+    ["amount", "premium"], decimals=0
+).fmt_number("age", decimals=0)
 ```
 
 ## Equity
@@ -218,8 +256,8 @@ styled_gt(liab_summary, "Liability Summary").fmt_currency(["amount", "premium"],
 
 ::: {.callout-tip}
 ## Example
-If Assets = $100M and Liabilities = $80M, then Equity = $20M.
-That $20M funds new projects, dividends, bonuses, regulatory requirements.
+If Assets = $50M and Liabilities = $40M, then Equity = $10M.
+That $10M funds new projects, dividends, bonuses, regulatory requirements.
 :::
 
 
@@ -231,11 +269,11 @@ What do these things actually look like?
 
 ```{python}
 # | label: asset-cashflows
-# Show cashflows for the 7Y Treasury
-ust_7y = assets[2]
+# Show cashflows for the 2Y Treasury (4 semi-annual periods — a complete bond lifecycle)
+ust_2y = assets[0]
 
 styled_gt(
-    ust_7y.cashflows().head(10), "$25M UST 7Y — Cashflows (first 10 periods)"
+    ust_2y.cashflows(), "$8M UST 2Y — All Cashflows"
 ).fmt_currency(
     ["coupon", "principal", "total"], decimals=0
 )
@@ -243,52 +281,117 @@ styled_gt(
 
 ```{python}
 # | label: asset-cashflow-metrics
-logger.info("$25M UST 7Y: PV @ %s = $%s", f"{DISCOUNT_RATE:.0%}", f"{ust_7y.present_value(DISCOUNT_RATE):,.0f}")
-logger.info("$25M UST 7Y: Duration = %.2f years", ust_7y.duration(DISCOUNT_RATE))
+logger.info("$8M UST 2Y: PV @ %s = $%s", f"{DISCOUNT_RATE:.0%}", f"{ust_2y.present_value(DISCOUNT_RATE):,.0f}")
+logger.info("$8M UST 2Y: Duration = %.2f years", ust_2y.duration(DISCOUNT_RATE))
 ```
+
+```{python}
+# | label: asset-cashflow-charts
+# Cashflow profiles for each asset — shows how maturity drives timing
+instrument_names = asset_summary["instrument"].to_list()
+
+fig = go.Figure()
+for i, (asset, name) in enumerate(zip(assets, instrument_names)):
+    cf = asset.cashflows()
+    years = [t / asset.frequency for t in cf["period"].to_list()]
+    totals = cf["total"].to_list()
+    fig.add_trace(go.Scatter(
+        x=years, y=totals, mode="lines", name=name,
+        line=dict(color=plot.PALETTE[i % len(plot.PALETTE)]),
+    ))
+
+fig.update_layout(
+    template="plotly_white",
+    title="Asset Cashflow Profiles by Instrument",
+    xaxis_title="Year", yaxis_title="Cashflow",
+    yaxis_tickprefix="$", yaxis_tickformat=",.0f",
+    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+    margin=dict(l=60, r=30, t=60, b=50),
+    hovermode="x unified",
+)
+fig.show()
+```
+
+Each bond pays level coupons then returns full principal at maturity — the spike at the end.
+Longer maturities push that principal repayment further out, increasing duration.
+The private credit instrument has a lower stated coupon (purchased at a discount), so its
+coupon line sits below the others relative to its face value.
 
 ## Liability Cashflows
 
 ```{python}
 # | label: liability-cashflows
 wl_cf = wl.cashflows()
+# Find the peak expected_benefit month and grab 5 months around it
+peak_idx = wl_cf["expected_benefit"].arg_max()
+peak_start = max(0, peak_idx - 2)
+peak_slice = wl_cf.slice(peak_start, 5)
+wl_display = (
+    pl.concat([wl_cf.head(5), peak_slice])
+    .with_columns(pl.col("period").alias("month"))
+    .select("month", "survival_prob", "expected_premium", "expected_benefit", "net_cashflow")
+)
 styled_gt(
-    wl_cf.head(24), "Whole Life — Expected Cashflows (first 24 periods)"
-).fmt_currency(["expected_premium", "expected_benefit", "net_cashflow"], decimals=0).fmt_number("survival_prob", decimals=4)
+    wl_display, "Whole Life — Monthly Cashflows (first 5 & peak liability months)"
+).fmt_currency(["expected_premium", "expected_benefit", "net_cashflow"], decimals=0).fmt_number(
+    "survival_prob", decimals=4
+).fmt_number("month", decimals=0)
 ```
 
 ```{python}
 # | label: liability-cashflows-spia
 spia_cf = spia.cashflows()
+spia_display = spia_cf.head(12).with_columns(
+    pl.col("period").alias("month")
+).select("month", "survival_prob", "payout", "expected_payout")
 styled_gt(
-    spia_cf.head(24), "SPIA — Expected Cashflows (first 24 periods)"
-).fmt_currency(["payout", "expected_payout"], decimals=0).fmt_number("survival_prob", decimals=4)
+    spia_display, "SPIA — Expected Monthly Cashflows (first 12 months)"
+).fmt_currency(["payout", "expected_payout"], decimals=0).fmt_number(
+    "survival_prob", decimals=4
+).fmt_number("month", decimals=0)
 ```
 
+::: {layout-ncol=2}
+
 ```{python}
-# | label: liability-cashflow-chart
-# Aggregate to annual for cleaner visualization
+# | label: liability-cashflow-chart-wl
+# Aggregate WL to annual
 wl_annual = wl_cf.group_by((pl.col("period") - 1) // wl.frequency).agg(
     pl.col("year").max().alias("year"),
-    pl.col("net_cashflow").sum().alias("wl_net_cashflow"),
+    pl.col("net_cashflow").sum().alias("net_cashflow"),
 )
-spia_annual = spia_cf.group_by((pl.col("period") - 1) // spia.frequency).agg(
-    pl.col("year").max().alias("year"),
-    pl.col("expected_payout").sum().alias("spia_expected_payout"),
-)
-liab_cf_combined = wl_annual.join(spia_annual, on="year", how="inner").sort("year").head(40)
-
 fig = plot.line_chart(
-    liab_cf_combined,
+    wl_annual.sort("year").head(40),
     x="year",
-    y=["wl_net_cashflow", "spia_expected_payout"],
-    title="Annual Liability Cashflows — WL vs SPIA (first 40 years)",
+    y="net_cashflow",
+    title="WL — Annual Net Cashflows",
     xlab="Year",
     ylab="Annual Cashflow",
     yformat="$",
 )
 fig.show()
 ```
+
+```{python}
+# | label: liability-cashflow-chart-spia
+# Aggregate SPIA to annual
+spia_annual = spia_cf.group_by((pl.col("period") - 1) // spia.frequency).agg(
+    pl.col("year").max().alias("year"),
+    pl.col("expected_payout").sum().alias("expected_payout"),
+)
+fig = plot.line_chart(
+    spia_annual.sort("year").head(40),
+    x="year",
+    y="expected_payout",
+    title="SPIA — Annual Expected Payouts",
+    xlab="Year",
+    ylab="Annual Payout",
+    yformat="$",
+)
+fig.show()
+```
+
+:::
 
 ## Equity (Surplus) View
 
@@ -320,15 +423,12 @@ fig = plot.bar_chart(
 fig.show()
 ```
 
-That's all there is to it — as long as interest rates never change again!
-Once we confirm that, we can go on a nice vacation and our work is done.
 
-...okay, there's more work to do.
 
 
 # 4. Key Mathematical Concepts
 
-Let's measure interest rate risk.
+How do actuaries measure the financial risk of interest rates?
 
 ## Duration
 
@@ -342,9 +442,10 @@ $$
 
 ```{python}
 # | label: duration-example
-bond_example = Bond(face_value=100, coupon_rate=0.04, maturity=5, frequency=2)
-dur = bond_example.duration(0.04)
-logger.info("5Y 4%% semi-annual bond: Duration = %.2f years", dur)
+bond_example = Bond(face_value=100, coupon_rate=0.02, maturity=30, frequency=2)
+base_rate = 0.02
+dur = bond_example.duration(base_rate)
+logger.info("30Y 2%% semi-annual bond: Duration = %.2f years", dur)
 ```
 
 ## Convexity
@@ -364,8 +465,8 @@ $$
 
 ```{python}
 # | label: convexity-example
-conv = bond_example.convexity(0.04)
-mod_dur = dur / (1 + 0.04 / 2)
+conv = bond_example.convexity(base_rate)
+mod_dur = dur / (1 + base_rate / 2)
 
 logger.info("Modified Duration: %.2f", mod_dur)
 logger.info("Convexity:         %.2f", conv)
@@ -373,9 +474,9 @@ logger.info("Convexity:         %.2f", conv)
 # Price change estimates across a continuous range of shocks
 shock_range = [s / 1000 for s in range(-30, 31)]
 approx_rows = []
-pv_base = bond_example.present_value(0.04)
+pv_base = bond_example.present_value(base_rate)
 for s in shock_range:
-    actual = (bond_example.present_value(0.04 + s) - pv_base) / pv_base
+    actual = (bond_example.present_value(base_rate + s) - pv_base) / pv_base
     dur_only = -mod_dur * s
     dur_conv = -mod_dur * s + 0.5 * conv * s**2
     approx_rows.append({
@@ -386,18 +487,53 @@ for s in shock_range:
     })
 
 approx_df = pl.DataFrame(approx_rows)
-fig = plot.line_chart(
-    approx_df,
-    x="rate_shock",
-    y=["actual", "duration_only", "duration_convexity"],
-    title="Price Approximation: Duration vs Duration + Convexity",
-    xlab="Rate Shock",
-    ylab="% Price Change",
-    yformat="%",
-    xformat="%",
+```
+
+::: {layout-ncol=2}
+
+```{python}
+# | label: duration-approx-chart
+fig = go.Figure()
+fig.add_trace(go.Scatter(
+    x=approx_df["rate_shock"].to_list(), y=approx_df["actual"].to_list(),
+    mode="lines", name="actual", line=dict(color="#2563eb"),
+))
+fig.add_trace(go.Scatter(
+    x=approx_df["rate_shock"].to_list(), y=approx_df["duration_only"].to_list(),
+    mode="lines", name="duration estimate", line=dict(color="#dc2626", dash="dash"),
+))
+fig.update_layout(
+    template="plotly_white", title="Actual vs Duration Estimate",
+    xaxis_title="Rate Shock", yaxis_title="% Price Change",
+    xaxis_tickformat=".1%", yaxis_tickformat=".0%",
+    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+    margin=dict(l=60, r=30, t=60, b=50),
 )
 fig.show()
 ```
+
+```{python}
+# | label: convexity-approx-chart
+fig = go.Figure()
+fig.add_trace(go.Scatter(
+    x=approx_df["rate_shock"].to_list(), y=approx_df["actual"].to_list(),
+    mode="lines", name="actual", line=dict(color="#2563eb"),
+))
+fig.add_trace(go.Scatter(
+    x=approx_df["rate_shock"].to_list(), y=approx_df["duration_convexity"].to_list(),
+    mode="lines", name="duration + convexity", line=dict(color="#16a34a", dash="dash"),
+))
+fig.update_layout(
+    template="plotly_white", title="Actual vs Duration + Convexity",
+    xaxis_title="Rate Shock", yaxis_title="% Price Change",
+    xaxis_tickformat=".1%", yaxis_tickformat=".0%",
+    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+    margin=dict(l=60, r=30, t=60, b=50),
+)
+fig.show()
+```
+
+:::
 
 ## DV01 (Dollar Value of a Basis Point)
 
@@ -442,6 +578,55 @@ Key properties:
 - KRDs across all tenors sum to the bond's effective duration
 - A bullet bond has KRD concentrated at its maturity
 - An amortizing bond (e.g. mortgage) has KRD spread across many tenors
+
+```{python}
+# | label: krd-visual
+# Visualise KRD: PV of each cashflow at baseline vs with a rate shock from year 5+
+ust_10y = assets[3]
+cf_10y = ust_10y.cashflows()
+r_base = DISCOUNT_RATE / ust_10y.frequency
+bump = 0.01  # +100 bps forward shock at year 5
+
+years_krd = [t / ust_10y.frequency for t in cf_10y["period"].to_list()]
+pv_baseline = []
+pv_shocked = []
+
+for t, total in zip(cf_10y["period"].to_list(), cf_10y["total"].to_list()):
+    yr = t / ust_10y.frequency
+    pv_baseline.append(total / (1 + r_base) ** t)
+    # Shock: rates +100bps for cashflows at year 5 and beyond
+    if yr >= 5:
+        r_bump = (DISCOUNT_RATE + bump) / ust_10y.frequency
+        pv_shocked.append(total / (1 + r_bump) ** t)
+    else:
+        pv_shocked.append(total / (1 + r_base) ** t)
+
+krd_df = pl.DataFrame({"year": years_krd, "baseline (4%)": pv_baseline, "shocked (5% from yr 5)": pv_shocked})
+
+fig = go.Figure()
+fig.add_trace(go.Scatter(
+    x=years_krd, y=pv_baseline, mode="lines+markers", name="Baseline (4%)",
+    line=dict(color="#2563eb"), marker=dict(size=5),
+))
+fig.add_trace(go.Scatter(
+    x=years_krd, y=pv_shocked, mode="lines+markers", name="Shocked (+100bps from Year 5)",
+    line=dict(color="#dc2626", dash="dash"), marker=dict(size=5),
+))
+fig.add_vrect(x0=5, x1=10.5, fillcolor="#dc2626", opacity=0.05, line_width=0,
+              annotation_text="Shocked region", annotation_position="top left")
+fig.update_layout(
+    template="plotly_white",
+    title="$15M UST 10Y — PV of Cashflows: Baseline vs Key Rate Shock",
+    xaxis_title="Year", yaxis_title="PV of Cashflow",
+    yaxis_tickprefix="$", yaxis_tickformat=",.0f",
+    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+    margin=dict(l=60, r=30, t=60, b=50),
+)
+fig.show()
+```
+
+The gap between the two lines from year 5 onward shows where **Key Rate Duration** sensitivity lives.
+Long-dated cashflows (especially the principal at maturity) are most affected by rate shocks at their tenor.
 
 ## Immunization (Preview)
 
@@ -526,7 +711,132 @@ This mismatch is the core problem ALM solves.
 :::
 
 
-# 6. Duration Hedging with Swaps
+# 6. Strategic Asset Allocation by Block
+
+Different liability types have different duration profiles.
+A smart insurer matches its **asset allocation** to the duration of the liabilities it backs.
+
+## Two Blocks of Business
+
+We build two blocks:
+
+- **Short-duration** (Term Life, ages 30–50): ~20-year policies, payouts concentrated in early years
+- **Long-duration** (SPIA, ages 60–75): lifetime payouts, cashflows stretch 30+ years
+
+```{python}
+# | label: block-saa-setup
+short_saa = SAA(weights={
+    "govt_bonds": 0.55,
+    "corp_bonds": 0.25,
+    "mortgages": 0.15,
+    "private_credit": 0.05,
+})
+
+long_saa = SAA(weights={
+    "govt_bonds": 0.25,
+    "corp_bonds": 0.45,
+    "mortgages": 0.20,
+    "private_credit": 0.10,
+})
+
+saa_compare = pl.DataFrame({
+    "asset_class": list(short_saa.weights.keys()),
+    "short_duration_block": list(short_saa.weights.values()),
+    "long_duration_block": list(long_saa.weights.values()),
+})
+styled_gt(saa_compare, "SAA by Liability Duration").fmt_percent(
+    ["short_duration_block", "long_duration_block"], decimals=0
+)
+```
+
+**Why the difference?**
+
+- Short-duration liabilities need **liquidity** and **safety** → more government bonds
+- Long-duration liabilities can tolerate **longer tenor** and **credit risk** → more corporate bonds
+- The spread earned on longer-dated corporate bonds compensates for additional credit and duration risk
+
+```{python}
+# | label: block-generation
+short_block = Block(
+    liability_type="Term",
+    saa=short_saa,
+    total_liability_amount=20_000_000,
+    mortality_table=mortality,
+    age_range=(30, 50),
+    discount_rate=DISCOUNT_RATE,
+    n_policies=200,
+    seed=42,
+)
+_ = short_block.generate_policies()
+_ = short_block.generate_assets()
+
+long_block = Block(
+    liability_type="SPIA",
+    saa=long_saa,
+    total_liability_amount=20_000_000,
+    mortality_table=mortality,
+    age_range=(60, 75),
+    discount_rate=DISCOUNT_RATE,
+    n_policies=200,
+    seed=42,
+)
+_ = long_block.generate_policies()
+_ = long_block.generate_assets()
+```
+
+## Cashflow Comparison
+
+*Note: These cashflows assume no reinvestment of asset proceeds as a simplifying assumption. In practice, maturing bonds and coupon income would be reinvested, smoothing asset cashflows over time. This leads to higher asset cashflows in earlier time periods than a fully built model would show.*
+
+```{python}
+# | label: block-short-cf
+fig_short = short_block.plot_cashflows()
+fig_short.show()
+```
+
+```{python}
+# | label: block-long-cf
+fig_long = long_block.plot_cashflows()
+fig_long.show()
+```
+
+## IRR Comparison
+
+The **Internal Rate of Return (IRR)** on the asset side tells us the expected yield
+the insurer earns on each block. Longer blocks with more private credit should
+earn a higher return — the reward for accepting illiquidity.
+
+```{python}
+# | label: block-irr
+short_asset_cf = short_block.asset_cashflows()
+long_asset_cf = long_block.asset_cashflows()
+
+# Build IRR cashflows: initial premium outflow + asset inflows by year
+short_irr_cfs = [-short_block.premium] + short_asset_cf["cashflow"].to_list()
+long_irr_cfs = [-long_block.premium] + long_asset_cf["cashflow"].to_list()
+
+short_irr = irr(short_irr_cfs)
+long_irr = irr(long_irr_cfs)
+
+irr_df = pl.DataFrame({
+    "block": ["Short-Duration (Term)", "Long-Duration (SPIA)"],
+    "saa_pc_weight": [short_saa.weights["private_credit"], long_saa.weights["private_credit"]],
+    "irr": [short_irr, long_irr],
+})
+styled_gt(irr_df, "Asset IRR by Block").fmt_percent(
+    ["saa_pc_weight", "irr"], decimals=2
+)
+```
+
+::: {.callout-tip}
+## Key Insight
+The long-duration block earns a higher IRR because it allocates more to corporate bonds
+and private credit. The credit spread and illiquidity premium are real sources of return — but only
+appropriate when the liabilities are long enough to wait.
+:::
+
+
+# 7. Duration Hedging with Swaps
 
 ## Strategic Asset Allocation
 
@@ -554,6 +864,21 @@ Swaps adjust portfolio duration without buying or selling bonds:
 
 - **Receive-fixed** adds duration (like buying a bond)
 - **Pay-fixed** removes duration (like selling a bond)
+
+::: {.callout-note}
+## Why Do Swaps Change Duration?
+
+Think of an interest rate swap as two bonds packaged together:
+
+| Position | Fixed Leg | Floating Leg | Net Duration |
+|---|---|---|---|
+| **Receive-fixed** | Long a fixed-rate bond (high duration) | Short a floating-rate note (≈ 0 duration) | **Positive** — adds duration |
+| **Pay-fixed** | Short a fixed-rate bond (high duration) | Long a floating-rate note (≈ 0 duration) | **Negative** — removes duration |
+
+A **floating-rate note** resets its coupon at each payment date, so its price barely moves when rates change (duration ≈ 0). A **fixed-rate bond** has locked-in coupons, so its price is highly sensitive to rates (duration > 0).
+
+When you **receive fixed**, you are economically long the fixed-rate bond — so you inherit its duration. When you **pay fixed**, you are economically short the fixed-rate bond — so you remove that duration from your portfolio.
+:::
 
 ```{python}
 # | label: swap-example
@@ -589,7 +914,7 @@ styled_gt(gap_df, "Duration Gap Analysis").fmt_currency("dv01", decimals=0)
 ```
 
 
-# 7. Immunization
+# 8. Immunization
 
 Immunization matches **both** duration and convexity to protect surplus against rate movements.
 
@@ -690,7 +1015,152 @@ fig.show()
 ```
 
 
-# 8. Conclusion
+# 9. Daily Hedging in Practice
+
+Immunization isn't a one-time exercise. Rates move every day, and the hedge must be
+**re-evaluated and adjusted** continuously. Here's what that looks like in practice.
+
+## Day 1 — Measure Gaps at Current Rates
+
+```{python}
+# | label: daily-hedge-day1
+rate_day1 = DISCOUNT_RATE  # 4.00%
+
+# Portfolio PV
+pv_assets_d1 = sum(a.present_value(rate_day1) for a in assets)
+pv_liab_d1 = wl.present_value(rate_day1) + spia.present_value(rate_day1)
+
+# Duration and convexity gaps
+dv01_a_d1 = sum(dv01(a.present_value, rate_day1) for a in assets)
+dv01_l_d1 = dv01(wl.present_value, rate_day1) + dv01(spia.present_value, rate_day1)
+dc_a_d1 = sum(dollar_convexity(a.present_value, rate_day1) for a in assets)
+dc_l_d1 = dollar_convexity(wl.present_value, rate_day1) + dollar_convexity(spia.present_value, rate_day1)
+
+day1_summary = pl.DataFrame({
+    "side": ["Assets", "Liabilities", "Gap (L − A)"],
+    "present_value": [pv_assets_d1, pv_liab_d1, pv_assets_d1 - pv_liab_d1],
+    "dv01": [dv01_a_d1, dv01_l_d1, dv01_l_d1 - dv01_a_d1],
+    "dollar_convexity": [dc_a_d1, dc_l_d1, dc_l_d1 - dc_a_d1],
+})
+styled_gt(day1_summary, f"Day 1 Portfolio — Rate: {rate_day1:.2%}").fmt_currency(
+    ["present_value", "dv01", "dollar_convexity"], decimals=0
+)
+```
+
+## Size the Hedge — Two Swaps
+
+```{python}
+# | label: daily-hedge-size
+# Use 5Y and 20Y swaps for good duration/convexity separation
+unit_5y = InterestRateSwap(notional=1, fixed_rate=rate_day1, tenor=5, pay_fixed=False)
+unit_20y = InterestRateSwap(notional=1, fixed_rate=rate_day1, tenor=20, pay_fixed=False)
+
+def swap_pv_5y(r: float) -> float:
+    return unit_5y.present_value([r] * unit_5y.n_periods, r)
+
+def swap_pv_20y(r: float) -> float:
+    return unit_20y.present_value([r] * unit_20y.n_periods, r)
+
+dd_gap_d1 = dv01_l_d1 - dv01_a_d1
+dc_gap_d1 = dc_l_d1 - dc_a_d1
+
+n_5y, n_20y = immunize(
+    dd_gap=dd_gap_d1, dc_gap=dc_gap_d1,
+    dd_per_unit_1=dv01(swap_pv_5y, rate_day1),
+    dc_per_unit_1=dollar_convexity(swap_pv_5y, rate_day1),
+    dd_per_unit_2=dv01(swap_pv_20y, rate_day1),
+    dc_per_unit_2=dollar_convexity(swap_pv_20y, rate_day1),
+)
+
+# Round to nearest $100k
+n_5y = round(n_5y / 100_000) * 100_000
+n_20y = round(n_20y / 100_000) * 100_000
+
+hedge_sizing = pl.DataFrame({
+    "instrument": ["5Y Swap", "20Y Swap"],
+    "notional": [n_5y, n_20y],
+    "direction": [
+        "Pay-fixed" if n_5y < 0 else "Receive-fixed",
+        "Pay-fixed" if n_20y < 0 else "Receive-fixed",
+    ],
+})
+styled_gt(hedge_sizing, "Hedge Trade — Day 1").fmt_currency("notional", decimals=0)
+```
+
+## Day 2 — Rates Drop 50bps Overnight
+
+```{python}
+# | label: daily-hedge-day2
+rate_day2 = 0.035  # 3.50%
+
+# Sized swaps
+swap_hedge_5y = InterestRateSwap(
+    notional=abs(n_5y), fixed_rate=rate_day1, tenor=5, pay_fixed=(n_5y < 0),
+)
+swap_hedge_20y = InterestRateSwap(
+    notional=abs(n_20y), fixed_rate=rate_day1, tenor=20, pay_fixed=(n_20y < 0),
+)
+
+# Day 1 values
+pv_hedge_d1 = (
+    swap_hedge_5y.present_value([rate_day1] * swap_hedge_5y.n_periods, rate_day1)
+    + swap_hedge_20y.present_value([rate_day1] * swap_hedge_20y.n_periods, rate_day1)
+)
+surplus_unhedged_d1 = pv_assets_d1 - pv_liab_d1
+surplus_hedged_d1 = pv_assets_d1 + pv_hedge_d1 - pv_liab_d1
+
+# Day 2 values
+pv_assets_d2 = sum(a.present_value(rate_day2) for a in assets)
+pv_liab_d2 = wl.present_value(rate_day2) + spia.present_value(rate_day2)
+pv_hedge_d2 = (
+    swap_hedge_5y.present_value([rate_day2] * swap_hedge_5y.n_periods, rate_day2)
+    + swap_hedge_20y.present_value([rate_day2] * swap_hedge_20y.n_periods, rate_day2)
+)
+surplus_unhedged_d2 = pv_assets_d2 - pv_liab_d2
+surplus_hedged_d2 = pv_assets_d2 + pv_hedge_d2 - pv_liab_d2
+
+impact_df = pl.DataFrame({
+    "day": ["Day 1 (4.00%)", "Day 2 (3.50%)", "Change"],
+    "assets": [pv_assets_d1, pv_assets_d2, pv_assets_d2 - pv_assets_d1],
+    "liabilities": [pv_liab_d1, pv_liab_d2, pv_liab_d2 - pv_liab_d1],
+    "hedge": [pv_hedge_d1, pv_hedge_d2, pv_hedge_d2 - pv_hedge_d1],
+    "surplus_unhedged": [surplus_unhedged_d1, surplus_unhedged_d2, surplus_unhedged_d2 - surplus_unhedged_d1],
+    "surplus_hedged": [surplus_hedged_d1, surplus_hedged_d2, surplus_hedged_d2 - surplus_hedged_d1],
+})
+styled_gt(impact_df, "Day 2 — Rate Impact (−50 bps)").fmt_currency(
+    ["assets", "liabilities", "hedge", "surplus_unhedged", "surplus_hedged"], decimals=0
+)
+```
+
+```{python}
+# | label: daily-hedge-chart
+surplus_compare = pl.DataFrame({
+    "day": ["Day 1", "Day 2"],
+    "unhedged": [surplus_unhedged_d1, surplus_unhedged_d2],
+    "hedged": [surplus_hedged_d1, surplus_hedged_d2],
+})
+fig = plot.bar_chart(
+    surplus_compare,
+    x="day",
+    y=["unhedged", "hedged"],
+    title="Surplus: Unhedged vs Hedged After −50bps Shock",
+    xlab="",
+    ylab="Surplus",
+    yformat="$",
+    barmode="group",
+)
+fig.show()
+```
+
+::: {.callout-important}
+## Daily Reality
+Without the hedge, a single overnight rate move can wipe out millions in surplus.
+With duration + convexity matching, surplus is stabilized — but the hedge must be
+recalibrated every day as rates, durations, and portfolio composition change.
+:::
+
+
+# 10. Conclusion
 
 ::: {.callout-tip}
 ## Key Takeaways
