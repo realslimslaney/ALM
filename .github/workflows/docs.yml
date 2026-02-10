@@ -7,6 +7,7 @@ on:
       - "docs/**"
       - "mkdocs.yml"
       - "src/alm/**"
+      - "quarto/**"
 
 permissions:
   contents: read
@@ -41,8 +42,19 @@ jobs:
             uv run quarto render "$f" --to html
           done
 
+      - name: Render Quarto reports
+        run: |
+          for f in quarto/*.qmd; do
+            uv run quarto render "$f" --to html
+          done
+
       - name: Build docs
         run: uv run mkdocs build --strict
+
+      - name: Copy Quarto reports to site
+        run: |
+          mkdir -p site/quarto
+          cp quarto/*.html site/quarto/
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
