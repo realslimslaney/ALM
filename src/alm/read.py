@@ -338,11 +338,16 @@ def update_credit_spreads() -> pl.DataFrame:
     The result is rounded to whole basis points and written to
     ``assumptions/credit_spreads.csv``.
 
+    If ``FRED_API_KEY`` is not set, the existing CSV is returned unchanged.
+
     Returns
     -------
     pl.DataFrame
         The updated credit spread table.
     """
+    if not os.environ.get("FRED_API_KEY"):
+        logger.warning("FRED_API_KEY not set — using existing credit spreads")
+        return get_credit_spreads()
     fred = _get_fred()
 
     # Fetch the latest non-null value for each anchor series

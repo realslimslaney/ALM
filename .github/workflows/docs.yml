@@ -43,10 +43,7 @@ jobs:
           done
 
       - name: Render Quarto reports
-        run: |
-          for f in quarto/*.qmd; do
-            uv run quarto render "$f" --to html
-          done
+        run: uv run quarto render quarto/ua_presentation.qmd --to html
 
       - name: Build docs
         run: uv run mkdocs build --strict
