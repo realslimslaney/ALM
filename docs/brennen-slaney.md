@@ -8,12 +8,11 @@
 
 
 ### Education
-- Attended the University of Alabama from 2016-2019
+- Attended the **University of Alabama** from 2016-2019
 - Bachelors in Finance
 - Masters in Applied Statistics
 
-### Career
-#### Cigna
+### Cigna
 - Started off as a health actuary in Cigna's Nashville office as a part of the Actuarial Executive Development Program
 
 ##### Medicare Pricing
@@ -26,7 +25,7 @@
 - Responsible for a lot of actuarial-judgment on current events, like projecting GLP-1 drug trends in early 2023, or modeling out what financials would be when the COVID emergency status ended
 
 
-#### Fortitude Re
+### Fortitude Re
 - After 3 years, switched to Life & Annuity Reinsurance
 - Much more asset exposure, long term products
 - Finished final FSA exam in health, began taking CFA exams to learn the asset side of the business
