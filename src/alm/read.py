@@ -345,10 +345,11 @@ def update_credit_spreads() -> pl.DataFrame:
     pl.DataFrame
         The updated credit spread table.
     """
-    if not os.environ.get("FRED_API_KEY"):
+    try:
+        fred = _get_fred()
+    except OSError:
         logger.warning("FRED_API_KEY not set — using existing credit spreads")
         return get_credit_spreads()
-    fred = _get_fred()
 
     # Fetch the latest non-null value for each anchor series
     anchor_bps: dict[str, float] = {}
