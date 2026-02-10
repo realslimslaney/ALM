@@ -37,7 +37,7 @@ from great_tables import GT, style, loc
 sys.path.insert(0, str((Path.cwd().parent) / "src"))
 from alm.asset import Bond, PrivateCredit
 from alm.liability import SPIA, Term, WL, FIA, qx_from_table
-from alm.read import get_2012_iam_table, read_treasury_rates, update_credit_spreads
+from alm.read import get_2012_iam_table, update_credit_spreads
 from alm.core import (
     Block,
     InterestRateSwap,
@@ -120,10 +120,6 @@ For this presentation we'll use the following sample portfolio:
 
 ```{python}
 # | label: assets
-from alm.read import read_treasury_rates
-
-rates = read_treasury_rates()
-
 assets = [
     Bond(
         face_value=8_000_000, coupon_rate=0.0390, maturity=2, frequency=2, rating="AAA"
