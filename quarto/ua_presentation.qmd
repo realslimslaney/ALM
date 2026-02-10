@@ -125,7 +125,9 @@ from alm.read import read_treasury_rates
 rates = read_treasury_rates()
 
 assets = [
-    Bond(face_value=8_000_000, coupon_rate=0.0390, maturity=2, frequency=2, rating="AAA"),
+    Bond(
+        face_value=8_000_000, coupon_rate=0.0390, maturity=2, frequency=2, rating="AAA"
+    ),
     Bond(
         face_value=10_000_000,
         coupon_rate=0.0425,
@@ -143,17 +145,27 @@ assets = [
         other_spread=0.005,
         rating="BB",
     ),
-    Bond(face_value=15_000_000, coupon_rate=0.0400, maturity=10, frequency=2, rating="AAA"),
-    Bond(face_value=8_000_000, coupon_rate=0.0420, maturity=20, frequency=2, rating="AA"),
+    Bond(
+        face_value=15_000_000,
+        coupon_rate=0.0400,
+        maturity=10,
+        frequency=2,
+        rating="AAA",
+    ),
+    Bond(
+        face_value=8_000_000, coupon_rate=0.0420, maturity=20, frequency=2, rating="AA"
+    ),
 ]
 
-# Compute purchase price = PV at the discount rate for each asset
-purchase_prices = []
-for a in assets:
-    if hasattr(a, "total_yield"):  # PrivateCredit
-        purchase_prices.append(a.present_value(DISCOUNT_RATE))
-    else:
-        purchase_prices.append(a.present_value(DISCOUNT_RATE))
+# Purchase prices slightly off par so IRR differs from coupon rate
+purchase_prices = [
+    7_950_000,  # 2Y UST — slight discount to $8M par
+    10_175_000,  # 5Y Corp A — slight premium to $10M par
+    4_850_000,  # 7Y PC BB — slight discount to $5M par
+    15_225_000,  # 10Y UST — slight premium to $15M par
+    7_880_000,  # 20Y AA — slight discount to $8M par
+]
+
 
 # Compute IRR from actual cashflows: -purchase_price at t=0, then periodic cashflows
 def bond_irr(asset, purchase_price: float) -> float:
@@ -165,6 +177,7 @@ def bond_irr(asset, purchase_price: float) -> float:
     # Solve for periodic IRR then annualise
     periodic_r = irr(period_cfs)
     return periodic_r * freq  # simple annualisation consistent with coupon convention
+
 
 asset_irrs = [bond_irr(a, pp) for a, pp in zip(assets, purchase_prices)]
 
