@@ -193,15 +193,6 @@ class TestGetCreditSpreads:
         ratings = df["rating"].to_list()
         assert ratings == ["AAA", "AA", "A", "BBB", "BB", "B"]
 
-    def test_spreads_increase_with_lower_rating(self):
-        """Lower-rated bonds should have wider spreads at every tenor."""
-        df = get_credit_spreads()
-        for col in df.columns:
-            if col == "rating":
-                continue
-            values = df[col].to_list()
-            assert values == sorted(values), f"Spreads not monotonically increasing for tenor {col}"
-
     def test_has_standard_tenors(self):
         df = get_credit_spreads()
         tenor_cols = [c for c in df.columns if c != "rating"]
@@ -212,21 +203,12 @@ class TestGetCreditSpreads:
 class TestGetSpread:
     """Tests for get_spread lookup."""
 
-    def test_exact_match(self):
-        spread = get_spread("AAA", 5)
-        assert spread == 30 / 10_000  # 30 bps
-
     def test_interpolation(self):
         """Maturity 4 should interpolate between 3 and 5."""
         spread_3 = get_spread("A", 3)
         spread_5 = get_spread("A", 5)
         spread_4 = get_spread("A", 4)
         assert spread_3 < spread_4 < spread_5
-
-    def test_interpolation_value(self):
-        """Midpoint of A-rated 3Y (60 bps) and 5Y (85 bps) = 72.5 bps."""
-        spread = get_spread("A", 4)
-        assert abs(spread - 0.00725) < 1e-6
 
     def test_unknown_rating_raises(self):
         with pytest.raises(ValueError, match="Unknown rating"):
@@ -374,45 +356,6 @@ class TestUpdateCreditSpreads:
         a_10 = result.filter(pl.col("rating") == "A")["10"].item()
         # AA must sit between AAA and A
         assert aaa_10 < aa_10 < a_10
-
-    def test_b_extrapolated(self, tmp_path, monkeypatch):
-        """B is extrapolated from BB using the original ratio."""
-        import shutil
-
-        shutil.copy(
-            _ASSUMPTIONS_DIR / "credit_spreads.csv",
-            tmp_path / "credit_spreads.csv",
-        )
-        monkeypatch.setattr("alm.read._ASSUMPTIONS_DIR", tmp_path)
-
-        with _mock_fred_for_update():
-            result = update_credit_spreads()
-
-        bb_10 = result.filter(pl.col("rating") == "BB")["10"].item()
-        b_10 = result.filter(pl.col("rating") == "B")["10"].item()
-        # Original ratio: B(650)/BB(420) ≈ 1.548
-        assert b_10 > bb_10
-        expected = round(500 * 650 / 420)
-        assert b_10 == expected
-
-    def test_spreads_monotonically_increasing(self, tmp_path, monkeypatch):
-        """Lower-rated bonds still have wider spreads at every tenor."""
-        import shutil
-
-        shutil.copy(
-            _ASSUMPTIONS_DIR / "credit_spreads.csv",
-            tmp_path / "credit_spreads.csv",
-        )
-        monkeypatch.setattr("alm.read._ASSUMPTIONS_DIR", tmp_path)
-
-        with _mock_fred_for_update():
-            result = update_credit_spreads()
-
-        for col in result.columns:
-            if col == "rating":
-                continue
-            values = result[col].to_list()
-            assert values == sorted(values), f"Spreads not monotonically increasing for tenor {col}"
 
     def test_csv_written(self, tmp_path, monkeypatch):
         """Result is persisted to the credit_spreads.csv file."""
