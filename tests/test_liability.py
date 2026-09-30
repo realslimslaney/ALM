@@ -1,6 +1,7 @@
 """Tests for alm.liability module."""
 
 import logging
+import math
 
 import polars as pl
 import pytest
@@ -351,6 +352,21 @@ class TestTerm:
         with pytest.raises(ValueError, match="policy term"):
             Term(face_value=1.0, annual_premium=0.0, term=20, qx=flat_qx(0.01, 10))
 
+    def test_from_face_equivalence_principle(self):
+        """PV of net cash flows at the pricing rate is zero for the net level premium."""
+        term = Term.from_face(
+            face_value=500_000, term=20, qx=flat_qx(0.005, 30), discount_rate=0.05
+        )
+        assert term.annual_premium > 0
+        assert term.present_value(0.05) == pytest.approx(0.0, abs=1.0)
+
+    def test_from_face_premium_below_whole_life(self):
+        """Term coverage is cheaper than whole life for the same insured and face."""
+        qx = flat_qx(0.01, 40)
+        term = Term.from_face(face_value=100_000, term=20, qx=qx, discount_rate=0.05)
+        wl = WL.from_face(face_value=100_000, qx=qx, discount_rate=0.05)
+        assert term.annual_premium < wl.annual_premium
+
     def test_survivors_receive_nothing(self):
         """Unlike whole life, a term policy pays only on death within the term."""
         term = Term(face_value=100_000, annual_premium=0.0, term=10, qx=flat_qx(0.0, 10))
@@ -420,3 +436,40 @@ class TestFIA:
     def test_convexity_positive(self, fia: FIA):
         rates = [0.04] * 7
         assert fia.convexity(rates, 0.05) > 0
+
+    # ---- embedded option ----------------------------------------------------
+
+    def test_option_cost_matches_call_spread(self, fia: FIA):
+        from alm.option import call_spread_cost
+
+        r = math.log(1.04)
+        assert fia.option_cost(r, 0.18) == pytest.approx(
+            call_spread_cost(fia.participation_rate, fia.cap, fia.floor, r, 0.18)
+        )
+
+    def test_full_budget_makes_value_equal_premium(self, fia: FIA):
+        """Spending a whole risk-free return on options makes fair value equal the premium."""
+        r = math.log(1.04)
+        full_budget = 1 - math.exp(-r)
+        fair = fia.with_cap_for_budget(full_budget, r, 0.18)
+        assert fair.risk_neutral_value(r, 0.18) == pytest.approx(fia.premium, rel=1e-9)
+
+    def test_target_spread_leaves_margin(self, fia: FIA):
+        """A cap set from a budget below the risk-free return leaves value below the premium."""
+        r = math.log(1.04)
+        budget = FIA.option_budget(earned_yield=0.055, target_spread=0.015, r=r)
+        designed = fia.with_cap_for_budget(budget, r, 0.18)
+        value = designed.risk_neutral_value(r, 0.18)
+        assert value < fia.premium
+        assert value > 0.8 * fia.premium
+
+    def test_risk_neutral_value_is_path_independent(self, fia: FIA):
+        r = math.log(1.04)
+        assert fia.risk_neutral_value(r, 0.18) == pytest.approx(fia.risk_neutral_value(r, 0.18))
+        assert fia.present_value([0.10] * 7, 0.04) != pytest.approx(
+            fia.present_value([0.0] * 7, 0.04)
+        )
+
+    def test_option_budget_rejects_negative_spread_income(self):
+        with pytest.raises(ValueError, match="target_spread"):
+            FIA.option_budget(earned_yield=0.04, target_spread=0.05, r=math.log(1.04))

@@ -22,7 +22,9 @@ from alm.option import PutOption as PutOption
 from alm.option import bs_call as bs_call
 from alm.option import bs_greeks as bs_greeks
 from alm.option import bs_put as bs_put
+from alm.option import call_spread_cost as call_spread_cost
 from alm.option import implied_vol as implied_vol
+from alm.option import solve_cap as solve_cap
 from alm.read import get_credit_spreads as get_credit_spreads
 from alm.read import get_spread as get_spread
 from alm.read import get_treasury_rates as get_treasury_rates

@@ -1,9 +1,13 @@
 """European option models with Black-Scholes-Merton pricing.
 
-All options are European-style (exercise at expiry only).
+All options are European-style (exercise at expiry only).  Rates here are
+*continuously compounded* (``r = ln(1 + i)`` for an annual effective ``i``),
+volatility is annualised, and ``T`` is in years.
 
-# TODO: Add American option support via binomial tree or finite difference methods.
-#       American puts have early exercise premium not captured by BSM.
+The ALM use is the fixed indexed annuity: one year of FIA crediting is a
+call spread on the index (long a call at the floor strike, short a call at
+the cap strike), so :func:`call_spread_cost` prices the insurer's annual
+option budget and :func:`solve_cap` finds the cap that budget affords.
 """
 
 from __future__ import annotations
@@ -21,6 +25,16 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Black-Scholes-Merton building blocks
 # ---------------------------------------------------------------------------
+
+
+def _validate_inputs(S: float, K: float, T: float, sigma: float) -> None:
+    """Reject inputs for which the BSM formulas are undefined."""
+    if S <= 0 or K <= 0:
+        raise ValueError(f"spot and strike must be positive, got S={S}, K={K}")
+    if T < 0:
+        raise ValueError(f"time to expiry must be non-negative, got T={T}")
+    if sigma <= 0:
+        raise ValueError(f"volatility must be positive, got sigma={sigma}")
 
 
 def _d1(S: float, K: float, T: float, r: float, sigma: float, q: float) -> float:
@@ -66,7 +80,8 @@ def bs_call(S: float, K: float, T: float, r: float, sigma: float, q: float = 0.0
     >>> round(bs_call(100, 100, 1.0, 0.05, 0.20), 4)
     10.4506
     """
-    if T <= 0:
+    _validate_inputs(S, K, T, sigma)
+    if T == 0:
         return max(S - K, 0.0)
     d1 = _d1(S, K, T, r, sigma, q)
     d2 = _d2(S, K, T, r, sigma, q)
@@ -101,7 +116,8 @@ def bs_put(S: float, K: float, T: float, r: float, sigma: float, q: float = 0.0)
     >>> round(bs_put(100, 100, 1.0, 0.05, 0.20), 4)
     5.5735
     """
-    if T <= 0:
+    _validate_inputs(S, K, T, sigma)
+    if T == 0:
         return max(K - S, 0.0)
     d1 = _d1(S, K, T, r, sigma, q)
     d2 = _d2(S, K, T, r, sigma, q)
@@ -140,7 +156,8 @@ def bs_greeks(
     - Vega is expressed per 1 % move in volatility (multiply raw vega by 0.01).
     - Rho is expressed per 1 % move in the risk-free rate.
     """
-    if T <= 0:
+    _validate_inputs(S, K, T, sigma)
+    if T == 0:
         return {
             "call_delta": 1.0 if S > K else 0.0,
             "put_delta": -1.0 if S < K else 0.0,
@@ -251,6 +268,105 @@ def implied_vol(
             f"(S={S}, K={K}, T={T}, r={r}, q={q}). "
             "Price may violate arbitrage bounds."
         ) from exc
+
+
+# ---------------------------------------------------------------------------
+# FIA crediting as a call spread
+# ---------------------------------------------------------------------------
+
+
+def call_spread_cost(
+    participation: float,
+    cap: float,
+    floor: float,
+    r: float,
+    sigma: float,
+    q: float = 0.0,
+    T: float = 1.0,
+) -> float:
+    """PV cost, per $1 of account value, of one year of FIA index crediting.
+
+    The credited rate ``c = clamp(participation * R, floor, cap)``, where *R*
+    is the index price return, decomposes on a unit index (``S_0 = 1``) as
+
+    ``c = floor + participation * [max(S_T - K_lo, 0) - max(S_T - K_hi, 0)]``
+
+    with ``K_lo = 1 + floor / participation`` and
+    ``K_hi = 1 + cap / participation``: a guaranteed floor plus a bull call
+    spread.  Its present value is the insurer's hedge cost for the year.
+
+    Parameters
+    ----------
+    participation : float
+        Fraction of the index return credited (> 0).
+    cap, floor : float
+        Annual credited-rate cap and floor as decimals (``cap >= floor``).
+    r : float
+        Continuously compounded risk-free rate.
+    sigma : float
+        Annualised index volatility.
+    q : float
+        Continuously compounded dividend yield of the index (price return is
+        credited, so dividends reduce the option value).  Default 0.
+    T : float
+        Crediting period in years (default 1 = annual point-to-point).
+
+    Returns
+    -------
+    float
+        Cost per $1 of account value (e.g. 0.035 = 3.5 % of the account).
+    """
+    if participation <= 0:
+        raise ValueError(f"participation must be positive, got {participation}")
+    if cap < floor:
+        raise ValueError(f"cap ({cap}) must be at least the floor ({floor})")
+    k_lo = 1.0 + floor / participation
+    k_hi = 1.0 + cap / participation
+    spread = bs_call(1.0, k_lo, T, r, sigma, q) - bs_call(1.0, k_hi, T, r, sigma, q)
+    return floor * math.exp(-r * T) + participation * spread
+
+
+def solve_cap(
+    budget: float,
+    participation: float,
+    floor: float,
+    r: float,
+    sigma: float,
+    q: float = 0.0,
+    T: float = 1.0,
+) -> float:
+    """Cap that makes the annual call-spread cost equal to the option budget.
+
+    Parameters
+    ----------
+    budget : float
+        Option budget per $1 of account value (see :meth:`alm.liability.FIA.option_budget`).
+    participation, floor, r, sigma, q, T
+        As in :func:`call_spread_cost`.
+
+    Returns
+    -------
+    float
+        The cap as a decimal.
+
+    Raises
+    ------
+    ValueError
+        If the budget does not even cover the floor, or exceeds the cost of
+        an uncapped participation (no finite cap fits).
+    """
+    lowest = call_spread_cost(participation, floor, floor, r, sigma, q, T)
+    highest = call_spread_cost(participation, 10.0, floor, r, sigma, q, T)
+    if budget < lowest:
+        raise ValueError(f"budget {budget:.4f} is below the cost of the floor alone ({lowest:.4f})")
+    if budget > highest:
+        raise ValueError(f"budget {budget:.4f} exceeds the cost of an uncapped design")
+    return brentq(
+        lambda cap: call_spread_cost(participation, cap, floor, r, sigma, q, T) - budget,
+        floor,
+        10.0,
+        xtol=1e-10,
+    )
 
 
 # ---------------------------------------------------------------------------
