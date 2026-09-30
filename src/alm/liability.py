@@ -224,7 +224,9 @@ class WL:
     """Whole Life Insurance.
 
     Level-premium whole life policy paying a death benefit
-    whenever the insured dies.
+    whenever the insured dies.  The end of the ``qx`` vector is treated
+    as the limiting age: anyone still alive then is paid the face value
+    in the final period, so the benefit is certain to be paid once.
 
     Parameters
     ----------
@@ -281,6 +283,8 @@ class WL:
 
             exp_prem = pmt * sp_start
             exp_ben = self.face_value * death_prob
+            if t == n_periods:  # limiting age: pay the survivors
+                exp_ben += self.face_value * sp_end
 
             periods.append(t)
             years_col.append(round(yr_end, 6))
@@ -301,34 +305,18 @@ class WL:
         )
 
     def present_value(self, discount_rate: float) -> float:
-        """PV of net liability cash flows (benefits minus premiums)."""
+        """PV of net liability cash flows (benefits minus premiums).
+
+        Rate is nominal annual, compounded ``frequency`` times.  Because the
+        cash flows change sign and the PV is near zero for a fairly priced
+        policy, Macaulay duration is not defined here; use
+        :func:`alm.core.dv01` on this method for rate sensitivity.
+        """
         r = discount_rate / self.frequency
         cf = self.cashflows()
         return sum(
             ncf / (1 + r) ** t for t, ncf in zip(cf["period"], cf["net_cashflow"], strict=True)
         )
-
-    def duration(self, discount_rate: float) -> float:
-        """Macaulay duration of net liability in years."""
-        r = discount_rate / self.frequency
-        cf = self.cashflows()
-        pv = self.present_value(discount_rate)
-        weighted = sum(
-            (t / self.frequency) * ncf / (1 + r) ** t
-            for t, ncf in zip(cf["period"], cf["net_cashflow"], strict=True)
-        )
-        return weighted / pv
-
-    def convexity(self, discount_rate: float) -> float:
-        """Convexity of net liability (in years squared)."""
-        r = discount_rate / self.frequency
-        cf = self.cashflows()
-        pv = self.present_value(discount_rate)
-        conv = sum(
-            t * (t + 1) * ncf / (1 + r) ** (t + 2)
-            for t, ncf in zip(cf["period"], cf["net_cashflow"], strict=True)
-        )
-        return conv / (pv * self.frequency**2)
 
     @classmethod
     def from_face(
@@ -358,6 +346,8 @@ class WL:
             v_t = (1 + r) ** (-t)
 
             pv_benefits += face_value * death_prob * v_t
+            if t == n_periods:  # limiting age: pay the survivors
+                pv_benefits += face_value * sp_end * v_t
             pv_annuity += (sp_start / frequency) * v_t
 
         fair_annual_premium = pv_benefits / pv_annuity
@@ -409,6 +399,10 @@ class Term:
 
     def __post_init__(self) -> None:
         _validate_qx(self.qx)
+        if len(self.qx) < self.term:
+            raise ValueError(
+                f"qx has {len(self.qx)} annual rates but the policy term is {self.term} years"
+            )
 
     def __repr__(self) -> str:
         qx_summary = f"[{self.qx[0]:.4f}, ..., {self.qx[-1]:.4f}] ({len(self.qx)} rates)"
@@ -457,34 +451,18 @@ class Term:
         )
 
     def present_value(self, discount_rate: float) -> float:
-        """PV of net liability cash flows (benefits minus premiums)."""
+        """PV of net liability cash flows (benefits minus premiums).
+
+        Rate is nominal annual, compounded ``frequency`` times.  Because the
+        cash flows change sign and the PV is near zero for a fairly priced
+        policy, Macaulay duration is not defined here; use
+        :func:`alm.core.dv01` on this method for rate sensitivity.
+        """
         r = discount_rate / self.frequency
         cf = self.cashflows()
         return sum(
             ncf / (1 + r) ** t for t, ncf in zip(cf["period"], cf["net_cashflow"], strict=True)
         )
-
-    def duration(self, discount_rate: float) -> float:
-        """Macaulay duration of net liability in years."""
-        r = discount_rate / self.frequency
-        cf = self.cashflows()
-        pv = self.present_value(discount_rate)
-        weighted = sum(
-            (t / self.frequency) * ncf / (1 + r) ** t
-            for t, ncf in zip(cf["period"], cf["net_cashflow"], strict=True)
-        )
-        return weighted / pv
-
-    def convexity(self, discount_rate: float) -> float:
-        """Convexity of net liability (in years squared)."""
-        r = discount_rate / self.frequency
-        cf = self.cashflows()
-        pv = self.present_value(discount_rate)
-        conv = sum(
-            t * (t + 1) * ncf / (1 + r) ** (t + 2)
-            for t, ncf in zip(cf["period"], cf["net_cashflow"], strict=True)
-        )
-        return conv / (pv * self.frequency**2)
 
 
 # ---------------------------------------------------------------------------
@@ -496,9 +474,16 @@ class Term:
 class FIA:
     """Fixed Indexed Annuity.
 
-    Single-premium deferred annuity whose credited rate tracks an
-    external reference rate (e.g. a FRED Treasury series), subject
-    to an annual floor and cap.
+    Single-premium deferred annuity credited each year with the price
+    return of an equity index (annual point-to-point), multiplied by a
+    participation rate and clamped between a floor and a cap.  The floor
+    is the policyholder's guarantee; the cap is a limit the insurer sets
+    (and can usually reset each year).
+
+    This model values the contract on one *given* path of index returns
+    with deterministic cash flows.  It does not price the embedded call
+    spread, model surrender charges, market value adjustments or lapses,
+    and its rate sensitivity treats the account value as fixed.
 
     Parameters
     ----------
@@ -516,6 +501,9 @@ class FIA:
         Maximum annual credited rate (default 0.06 = 6 %).
     participation_rate : float
         Fraction of the index return credited to the account (default 1.0).
+    index returns (method arguments)
+        Annual price returns of the reference equity index as decimals
+        (e.g. ``0.07`` for +7 %), one per year of the term.
     age : int, optional
         Issue age — stored for reference, does not affect calculations.
     """
@@ -539,37 +527,37 @@ class FIA:
             f"age={self.age})"
         )
 
-    def credited_rate(self, index_rate: float) -> float:
-        """Apply participation rate, floor, and cap to a single index rate."""
-        return max(self.floor, min(self.cap, index_rate * self.participation_rate))
+    def credited_rate(self, index_return: float) -> float:
+        """Credited rate for one year: participation x index return, floored and capped."""
+        return max(self.floor, min(self.cap, index_return * self.participation_rate))
 
-    def _build_account_values(self, index_rates: list[float]) -> list[float]:
+    def _build_account_values(self, index_returns: list[float]) -> list[float]:
         """Return account values ``[AV_0, AV_1, ..., AV_term]``."""
         av = float(self.premium)
         avs = [av]
-        for rate in index_rates[: self.term]:
+        for rate in index_returns[: self.term]:
             av *= 1 + self.credited_rate(rate)
             avs.append(av)
         return avs
 
-    def account_values(self, index_rates: list[float]) -> pl.DataFrame:
+    def account_values(self, index_returns: list[float]) -> pl.DataFrame:
         """Year-by-year account value accumulation.
 
         Parameters
         ----------
-        index_rates : list[float]
-            Annual reference rates for each year of the term.
+        index_returns : list[float]
+            Annual index returns for each year of the term.
 
-        Columns: year, index_rate, credited_rate, account_value.
+        Columns: year, index_return, credited_rate, account_value.
         """
-        avs = self._build_account_values(index_rates)
+        avs = self._build_account_values(index_returns)
 
         years_col = [0]
         ir_col = [0.0]
         cr_col = [0.0]
         av_col = [avs[0]]
 
-        for yr, rate in enumerate(index_rates[: self.term], start=1):
+        for yr, rate in enumerate(index_returns[: self.term], start=1):
             years_col.append(yr)
             ir_col.append(rate)
             cr_col.append(self.credited_rate(rate))
@@ -578,25 +566,25 @@ class FIA:
         return pl.DataFrame(
             {
                 "year": years_col,
-                "index_rate": ir_col,
+                "index_return": ir_col,
                 "credited_rate": cr_col,
                 "account_value": av_col,
             }
         )
 
-    def cashflows(self, index_rates: list[float]) -> pl.DataFrame:
+    def cashflows(self, index_returns: list[float]) -> pl.DataFrame:
         """Expected liability cash flows (annual).
 
         Parameters
         ----------
-        index_rates : list[float]
-            Annual reference rates for each year of the term.
+        index_returns : list[float]
+            Annual index returns for each year of the term.
 
         Columns: year, account_value, survival_prob, death_prob,
                  expected_death_benefit, expected_maturity_benefit,
                  net_cashflow.
         """
-        avs = self._build_account_values(index_rates)
+        avs = self._build_account_values(index_returns)
 
         years_col, av_col = [], []
         surv_probs, death_probs = [], []
@@ -631,28 +619,28 @@ class FIA:
             }
         )
 
-    def present_value(self, index_rates: list[float], discount_rate: float) -> float:
+    def present_value(self, index_returns: list[float], discount_rate: float) -> float:
         """PV of expected liability cash flows."""
-        cf = self.cashflows(index_rates)
+        cf = self.cashflows(index_returns)
         return sum(
             ncf / (1 + discount_rate) ** yr
             for yr, ncf in zip(cf["year"], cf["net_cashflow"], strict=True)
         )
 
-    def duration(self, index_rates: list[float], discount_rate: float) -> float:
-        """Macaulay duration in years."""
-        cf = self.cashflows(index_rates)
-        pv = self.present_value(index_rates, discount_rate)
+    def duration(self, index_returns: list[float], discount_rate: float) -> float:
+        """Macaulay duration in years on the given index path (account value held fixed)."""
+        cf = self.cashflows(index_returns)
+        pv = self.present_value(index_returns, discount_rate)
         weighted = sum(
             yr * ncf / (1 + discount_rate) ** yr
             for yr, ncf in zip(cf["year"], cf["net_cashflow"], strict=True)
         )
         return weighted / pv
 
-    def convexity(self, index_rates: list[float], discount_rate: float) -> float:
-        """Convexity (in years squared)."""
-        cf = self.cashflows(index_rates)
-        pv = self.present_value(index_rates, discount_rate)
+    def convexity(self, index_returns: list[float], discount_rate: float) -> float:
+        """Convexity in years squared on the given index path (account value held fixed)."""
+        cf = self.cashflows(index_returns)
+        pv = self.present_value(index_returns, discount_rate)
         conv = sum(
             yr * (yr + 1) * ncf / (1 + discount_rate) ** (yr + 2)
             for yr, ncf in zip(cf["year"], cf["net_cashflow"], strict=True)

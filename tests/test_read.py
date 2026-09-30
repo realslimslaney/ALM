@@ -199,6 +199,23 @@ class TestGetCreditSpreads:
         tenor_cols = [c for c in df.columns if c != "rating"]
         assert len(tenor_cols) >= 6
 
+    def test_spreads_widen_with_each_rating_step(self):
+        """AAA < AA < A < BBB < BB < B at every tenor in the committed table."""
+        df = get_credit_spreads()
+        for tenor in [c for c in df.columns if c != "rating"]:
+            column = df[tenor].to_list()
+            assert column == sorted(column) and len(set(column)) == len(column), (
+                f"spreads not strictly increasing by rating at tenor {tenor}: {column}"
+            )
+
+    def test_spreads_widen_with_tenor(self):
+        """Each rating's curve is upward sloping."""
+        df = get_credit_spreads()
+        tenors = sorted((c for c in df.columns if c != "rating"), key=int)
+        for row in df.iter_rows(named=True):
+            curve = [row[t] for t in tenors]
+            assert curve == sorted(curve), f"{row['rating']} curve is not upward sloping: {curve}"
+
 
 # ---------- get_spread ----------
 class TestGetSpread:
@@ -305,14 +322,14 @@ class TestReadCreditSpreadIndices:
 def _mock_fred_for_update():
     """Return a context-manager patch with known spread values."""
     mock_fred = MagicMock()
-    # Values in percentage points (×100 → bps)
-    # AAA10Y=0.60→60 bps, IG_OAS=1.50→150 bps,
-    # BAA10Y=2.50→250 bps, HY_OAS=5.00→500 bps
+    # Values in percentage points (x100 -> bps): one ICE BofA OAS series per rating
     series_data = {
-        "AAA10Y": pd.Series([0.60]),
-        "BAMLC0A0CM": pd.Series([1.50]),
-        "BAA10Y": pd.Series([2.50]),
-        "BAMLH0A0HYM2": pd.Series([5.00]),
+        "BAMLC0A1CAAA": pd.Series([0.40]),
+        "BAMLC0A2CAA": pd.Series([0.55]),
+        "BAMLC0A3CA": pd.Series([0.75]),
+        "BAMLC0A4CBBB": pd.Series([1.20]),
+        "BAMLH0A1HYBB": pd.Series([2.50]),
+        "BAMLH0A2HYB": pd.Series([4.00]),
     }
     mock_fred.get_series.side_effect = lambda sid, **kw: series_data[sid]
     return patch("alm.read._get_fred", return_value=mock_fred)
@@ -334,13 +351,12 @@ class TestUpdateCreditSpreads:
         with _mock_fred_for_update():
             result = update_credit_spreads()
 
-        assert result.filter(pl.col("rating") == "AAA")["10"].item() == 60
-        assert result.filter(pl.col("rating") == "A")["10"].item() == 150
-        assert result.filter(pl.col("rating") == "BBB")["10"].item() == 250
-        assert result.filter(pl.col("rating") == "BB")["10"].item() == 500
+        expected = {"AAA": 40, "AA": 55, "A": 75, "BBB": 120, "BB": 250, "B": 400}
+        for rating, bps in expected.items():
+            assert result.filter(pl.col("rating") == rating)["10"].item() == bps
 
-    def test_aa_interpolated(self, tmp_path, monkeypatch):
-        """AA is interpolated between AAA and A."""
+    def test_ratings_stay_ordered_at_every_tenor(self, tmp_path, monkeypatch):
+        """Scaling from one index family keeps AAA < AA < ... < B at every tenor."""
         import shutil
 
         shutil.copy(
@@ -352,11 +368,9 @@ class TestUpdateCreditSpreads:
         with _mock_fred_for_update():
             result = update_credit_spreads()
 
-        aa_10 = result.filter(pl.col("rating") == "AA")["10"].item()
-        aaa_10 = result.filter(pl.col("rating") == "AAA")["10"].item()
-        a_10 = result.filter(pl.col("rating") == "A")["10"].item()
-        # AA must sit between AAA and A
-        assert aaa_10 < aa_10 < a_10
+        for tenor in [c for c in result.columns if c != "rating"]:
+            column = result[tenor].to_list()
+            assert column == sorted(column), f"not ordered at tenor {tenor}: {column}"
 
     def test_csv_written(self, tmp_path, monkeypatch):
         """Result is persisted to the credit_spreads.csv file."""

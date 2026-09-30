@@ -563,13 +563,13 @@ fia_av = fia.account_values(fia_index_rates)
 # Join market return and credited rate into the cashflow table
 fia_display = (
     fia_cf.join(
-        fia_av.filter(pl.col("year") > 0).select("year", "index_rate", "credited_rate"),
+        fia_av.filter(pl.col("year") > 0).select("year", "index_return", "credited_rate"),
         on="year",
         how="left",
     )
     .select(
         "year",
-        pl.col("index_rate").alias("market_return"),
+        pl.col("index_return").alias("market_return"),
         pl.col("credited_rate").alias("fia_return"),
         "account_value", "survival_prob",
         "expected_death_benefit", "expected_maturity_benefit",

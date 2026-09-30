@@ -37,6 +37,7 @@ import os
 
 sys.path.insert(0, str((Path.cwd().parent.parent) / "src"))
 from alm.liability import Term, WL, qx_from_table
+from alm.core import dv01, dollar_convexity
 from alm.read import get_2012_iam_table
 from alm import plot
 
@@ -119,17 +120,19 @@ $$
 PV = \sum_{t=1}^{T \cdot f} \frac{\text{Net}_t}{(1 + r/f)^t}
 $$
 
-## Duration
+## Rate Sensitivity: DV01
+
+The net cash flows change sign (premiums in, benefits out) and their present value is
+near zero for a fairly priced policy, so Macaulay duration is not defined for them: it
+divides a weighted sum by a PV of about zero. The sensitivity measure is the **dollar
+value of one basis point** (DV01), the change in PV for a 1 bp parallel move in the
+discount rate, computed by central difference:
 
 $$
-D = \frac{1}{PV} \sum_{t=1}^{T \cdot f} \frac{t}{f} \cdot \frac{\text{Net}_t}{(1 + r/f)^t}
+\text{DV01} = \frac{PV(r - 0.0001) - PV(r + 0.0001)}{2}
 $$
 
-## Convexity
-
-$$
-C = \frac{1}{PV \cdot f^2} \sum_{t=1}^{T \cdot f} \frac{t(t+1) \cdot \text{Net}_t}{(1 + r/f)^{t+2}}
-$$
+A positive DV01 means the net liability grows when rates fall.
 
 ---
 
@@ -217,17 +220,16 @@ for t in terms:
     comp_rows.append({
         "term_years": t,
         "pv_net_liability": tm.present_value(DISCOUNT_RATE),
-        "duration": tm.duration(DISCOUNT_RATE),
-        "convexity": tm.convexity(DISCOUNT_RATE),
+        "dv01": dv01(tm.present_value, DISCOUNT_RATE),
     })
 
 comp_df = pl.DataFrame(comp_rows)
 styled_gt(comp_df, "Impact of Policy Term on Risk Metrics").fmt_currency(
-    "pv_net_liability", decimals=0
-).fmt_number(["duration", "convexity"], decimals=2)
+    ["pv_net_liability", "dv01"], decimals=0
+)
 ```
 
-Longer terms increase both the net liability PV and duration, as more years of mortality exposure are included.
+At a fixed $1,200 premium the net liability PV is negative (the premium is more than the net single premium of the benefits at these ages) and it rises toward zero as the term lengthens and more years of mortality exposure are included. DV01 grows with the term because the later, larger expected claims are the most rate-sensitive cash flows.
 
 ---
 
@@ -296,42 +298,42 @@ fig.show()
 
 ---
 
-# Duration & Convexity
+# Rate Sensitivity
 
 ```{python}
 #| label: term-risk-metrics
 metrics = pl.DataFrame({
-    "metric": ["Net Liability PV", "Macaulay Duration", "Convexity"],
+    "metric": ["Net Liability PV", "DV01 (per 1 bp)", "Dollar convexity (per unit yield squared)"],
     "value": [
         f"${term.present_value(DISCOUNT_RATE):,.0f}",
-        f"{term.duration(DISCOUNT_RATE):.2f} years",
-        f"{term.convexity(DISCOUNT_RATE):.2f}",
+        f"${dv01(term.present_value, DISCOUNT_RATE):,.0f}",
+        f"${dollar_convexity(term.present_value, DISCOUNT_RATE):,.0f}",
     ],
 })
 styled_gt(metrics, f"Risk Metrics @ {DISCOUNT_RATE:.0%} Discount Rate")
 ```
 
 ```{python}
-#| label: term-duration-by-rate
+#| label: term-dv01-by-rate
 risk_rows = []
 for r in [r / 1000 for r in range(20, 71, 5)]:
     risk_rows.append({
         "discount_rate": r,
-        "duration": term.duration(r),
-        "convexity": term.convexity(r),
+        "dv01": dv01(term.present_value, r),
     })
 
 risk_df = pl.DataFrame(risk_rows)
 fig = plot.line_chart(
     risk_df,
     x="discount_rate",
-    y=["duration", "convexity"],
-    title="Term Life Duration & Convexity vs Discount Rate",
+    y="dv01",
+    title="Term Life Net Liability DV01 vs Discount Rate",
     xlab="Discount Rate",
-    ylab="Years / Years²",
+    ylab="DV01 ($ per 1 bp)",
     xformat="%",
+    yformat="$",
 )
 fig.show()
 ```
 
-Term policies have shorter durations than whole life because cashflows are capped at the policy term, making them easier to hedge with medium-term fixed-income assets.
+Term policies are far less rate-sensitive than whole life because their cash flows stop at the policy term, which makes them easier to back with medium-term fixed-income assets.

@@ -259,11 +259,27 @@ class TestWL:
     def test_pv_returns_float(self, wl: WL):
         assert isinstance(wl.present_value(0.05), float)
 
-    def test_duration_returns_float(self, wl: WL):
-        assert isinstance(wl.duration(0.05), float)
+    def test_no_macaulay_duration_on_net_cashflows(self, wl: WL):
+        """Net cash flows change sign and PV is ~0 when fairly priced; DV01 is the measure."""
+        assert not hasattr(wl, "duration")
+        assert not hasattr(wl, "convexity")
 
-    def test_convexity_returns_float(self, wl: WL):
-        assert isinstance(wl.convexity(0.05), float)
+    def test_benefit_is_paid_exactly_once(self):
+        """The end of the qx vector is the limiting age: total expected benefit equals face."""
+        wl = WL(face_value=100_000, annual_premium=0.0, qx=flat_qx(0.01, 30), frequency=12)
+        assert wl.cashflows()["expected_benefit"].sum() == pytest.approx(100_000)
+
+    def test_immortal_insured_is_paid_at_limiting_age(self):
+        """With zero mortality the whole face is paid in the final period."""
+        wl = WL(face_value=100_000, annual_premium=0.0, qx=flat_qx(0.0, 5), frequency=12)
+        cf = wl.cashflows()
+        assert cf["expected_benefit"][:-1].sum() == pytest.approx(0.0)
+        assert cf["expected_benefit"][-1] == pytest.approx(100_000)
+
+    def test_single_premium_pv_equals_net_single_premium(self):
+        """Known answer: with no mortality the NSP is a 5-year zero at 12% nominal."""
+        wl = WL(face_value=100_000, annual_premium=0.0, qx=flat_qx(0.0, 5), frequency=12)
+        assert wl.present_value(0.12) == pytest.approx(100_000 / 1.01**60, rel=1e-9)
 
     # --- WL.from_face tests ---
 
@@ -327,11 +343,18 @@ class TestTerm:
     def test_pv_returns_float(self, term: Term):
         assert isinstance(term.present_value(0.05), float)
 
-    def test_duration_positive(self, term: Term):
-        assert term.duration(0.05) > 0
+    def test_no_macaulay_duration_on_net_cashflows(self, term: Term):
+        assert not hasattr(term, "duration")
+        assert not hasattr(term, "convexity")
 
-    def test_convexity_returns_float(self, term: Term):
-        assert isinstance(term.convexity(0.05), float)
+    def test_qx_shorter_than_term_raises(self):
+        with pytest.raises(ValueError, match="policy term"):
+            Term(face_value=1.0, annual_premium=0.0, term=20, qx=flat_qx(0.01, 10))
+
+    def test_survivors_receive_nothing(self):
+        """Unlike whole life, a term policy pays only on death within the term."""
+        term = Term(face_value=100_000, annual_premium=0.0, term=10, qx=flat_qx(0.0, 10))
+        assert term.cashflows()["expected_benefit"].sum() == pytest.approx(0.0)
 
 
 # ---------------------------------------------------------------------------

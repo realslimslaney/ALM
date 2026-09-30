@@ -68,16 +68,25 @@ class TestBlock:
         fig = block.plot_cashflows()
         assert fig is not None
 
-    def test_reinvest_after_maturity(self, block: Block):
-        block.generate_assets()
-        # After year 4, the 3-year bonds should have matured
-        new = block.reinvest(year=4)
-        assert len(new) > 0
+    def test_government_bonds_carry_no_spread(self, block: Block):
+        """Treasuries are the risk-free benchmark: coupon equals the block rate, spread is zero."""
+        from alm.asset import Bond
 
-    def test_reinvest_no_matured_bonds(self, block: Block):
-        block.generate_assets()
-        new = block.reinvest(year=1)
-        assert len(new) == 0
+        govt = [a for a in block.generate_assets() if isinstance(a, Bond) and a.rating == "AA+"]
+        assert govt, "block should hold government bonds"
+        assert all(b.credit_spread == 0.0 for b in govt)
+        assert all(b.coupon_rate == pytest.approx(block.discount_rate) for b in govt)
+
+    def test_corporate_bonds_carry_spread(self, block: Block):
+        from alm.asset import Bond
+
+        corp = [a for a in block.generate_assets() if isinstance(a, Bond) and a.rating != "AA+"]
+        assert corp
+        assert all(b.credit_spread > 0.0 for b in corp)
+
+    def test_wl_and_term_policies_are_single_premium_equivalent(self, block: Block):
+        policies = block.generate_policies()
+        assert all(p.annual_premium == 0.0 for p in policies)
 
     def test_seed_reproducibility(self, block: Block):
         policies_1 = block.generate_policies()
@@ -133,8 +142,8 @@ class TestBlockPremium:
         assert premium > 0
         assert premium < block.total_liability_amount
 
-    def test_premium_includes_profit_margin(self):
-        """Higher profit_margin should produce a higher premium."""
+    def test_premium_includes_loading(self):
+        """A higher loading on the net single premium produces a higher premium."""
         kwargs = dict(
             liability_type="WL",
             saa=default_saa(),
@@ -145,8 +154,8 @@ class TestBlockPremium:
             n_policies=10,
             seed=42,
         )
-        block_low = Block(**kwargs, profit_margin=0.02)
-        block_high = Block(**kwargs, profit_margin=0.10)
+        block_low = Block(**kwargs, premium_loading=0.02)
+        block_high = Block(**kwargs, premium_loading=0.10)
         assert block_high.calculate_premium() > block_low.calculate_premium()
 
     def test_explicit_premium_used_for_assets(self):
@@ -217,10 +226,23 @@ class TestBlockFIA:
             age_range=(50, 60),
             discount_rate=0.04,
             n_policies=10,
-            index_rates=[0.04] * 15,
+            index_returns=[0.04] * 15,
             seed=99,
         )
         policies = block.generate_policies()
         assert all(isinstance(p, FIA) for p in policies)
         cf = block.liability_cashflows()
         assert isinstance(cf, pl.DataFrame)
+
+    def test_fia_block_requires_index_returns(self):
+        with pytest.raises(ValueError, match="index_returns"):
+            Block(
+                liability_type="FIA",
+                saa=default_saa(),
+                total_liability_amount=1_000_000,
+                mortality_table=_make_mortality(min_age=50),
+                age_range=(50, 60),
+                discount_rate=0.04,
+                n_policies=10,
+                seed=99,
+            )

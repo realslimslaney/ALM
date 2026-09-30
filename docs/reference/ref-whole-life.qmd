@@ -37,6 +37,7 @@ import os
 
 sys.path.insert(0, str((Path.cwd().parent.parent) / "src"))
 from alm.liability import WL, qx_from_table
+from alm.core import dv01, dollar_convexity
 from alm.read import get_2012_iam_table
 from alm import plot
 
@@ -123,17 +124,19 @@ $$
 
 Positive = net outflow for the insurer (early on, premium income exceeds expected claims; later, claims dominate).
 
-## Duration
+## Rate Sensitivity: DV01
+
+The net cash flows change sign (premiums in, benefits out) and their present value is
+near zero for a fairly priced policy, so Macaulay duration is not defined for them: it
+divides a weighted sum by a PV of about zero. The sensitivity measure is the **dollar
+value of one basis point** (DV01), the change in PV for a 1 bp parallel move in the
+discount rate, computed by central difference:
 
 $$
-D = \frac{1}{PV} \sum_{t=1}^{n} \frac{t}{f} \cdot \frac{\text{Net}_t}{(1 + r/f)^t}
+\text{DV01} = \frac{PV(r - 0.0001) - PV(r + 0.0001)}{2}
 $$
 
-## Convexity
-
-$$
-C = \frac{1}{PV \cdot f^2} \sum_{t=1}^{n} \frac{t(t+1) \cdot \text{Net}_t}{(1 + r/f)^{t+2}}
-$$
+A positive DV01 means the net liability grows when rates fall.
 
 ---
 
@@ -224,7 +227,7 @@ fig = plot.line_chart(
 fig.show()
 ```
 
-The crossover point — where cumulative expected benefits exceed cumulative expected premiums — is the breakeven year from the insurer's perspective.
+The crossover point, where cumulative expected benefits overtake cumulative expected premiums, is not a breakeven: the early excess premiums are invested and fund the reserve that pays the later claims. It shows the timing mismatch that makes whole life a long-duration liability.
 
 ---
 
@@ -240,13 +243,13 @@ for a in ages:
     age_rows.append({
         "issue_age": a,
         "annual_premium": w.annual_premium,
-        "duration": w.duration(DISCOUNT_RATE),
+        "dv01_per_1m_face": dv01(w.present_value, DISCOUNT_RATE),
     })
 
 age_df = pl.DataFrame(age_rows)
-styled_gt(age_df, "WL Premium & Duration by Issue Age").fmt_currency(
-    "annual_premium", decimals=0
-).fmt_number(["duration", "issue_age"], decimals=1)
+styled_gt(age_df, "WL Premium & DV01 by Issue Age ($1M face)").fmt_currency(
+    ["annual_premium", "dv01_per_1m_face"], decimals=0
+).fmt_number("issue_age", decimals=0)
 ```
 
 ```{python}
@@ -263,7 +266,7 @@ fig = plot.bar_chart(
 fig.show()
 ```
 
-Older issue ages require higher premiums because there are fewer years to collect premiums before the expected claim.
+Older issue ages require higher premiums because there are fewer years to collect premiums before the expected claim. DV01 falls with issue age because the remaining horizon, and with it the rate sensitivity, shortens.
 
 ---
 
@@ -290,42 +293,42 @@ fig.show()
 
 ---
 
-# Duration & Convexity
+# Rate Sensitivity
 
 ```{python}
 #| label: wl-risk-metrics
 metrics = pl.DataFrame({
-    "metric": ["Net Liability PV", "Macaulay Duration", "Convexity"],
+    "metric": ["Net Liability PV", "DV01 (per 1 bp)", "Dollar convexity (per unit yield squared)"],
     "value": [
         f"${wl.present_value(DISCOUNT_RATE):,.0f}",
-        f"{wl.duration(DISCOUNT_RATE):.2f} years",
-        f"{wl.convexity(DISCOUNT_RATE):.2f}",
+        f"${dv01(wl.present_value, DISCOUNT_RATE):,.0f}",
+        f"${dollar_convexity(wl.present_value, DISCOUNT_RATE):,.0f}",
     ],
 })
 styled_gt(metrics, f"Risk Metrics @ {DISCOUNT_RATE:.0%} Discount Rate")
 ```
 
 ```{python}
-#| label: wl-duration-by-rate
+#| label: wl-dv01-by-rate
 risk_rows = []
 for r in [r / 1000 for r in range(20, 71, 5)]:
     risk_rows.append({
         "discount_rate": r,
-        "duration": wl.duration(r),
-        "convexity": wl.convexity(r),
+        "dv01": dv01(wl.present_value, r),
     })
 
 risk_df = pl.DataFrame(risk_rows)
 fig = plot.line_chart(
     risk_df,
     x="discount_rate",
-    y=["duration", "convexity"],
-    title="WL Duration & Convexity vs Discount Rate",
+    y="dv01",
+    title="WL Net Liability DV01 vs Discount Rate",
     xlab="Discount Rate",
-    ylab="Years / Years²",
+    ylab="DV01 ($ per 1 bp)",
     xformat="%",
+    yformat="$",
 )
 fig.show()
 ```
 
-Whole life policies typically have very long durations due to the lifetime coverage horizon, making them among the most interest-rate-sensitive liabilities an insurer holds.
+The net liability PV is about zero at the pricing rate by construction, yet its DV01 is large: a whole life policy priced at 4% loses money for the insurer if rates fall and the premiums must be invested at less. That combination, small value and large rate sensitivity, is why whole life is among the most interest-rate-sensitive liabilities an insurer holds.

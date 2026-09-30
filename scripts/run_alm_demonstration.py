@@ -29,7 +29,7 @@ mortality = get_2012_iam_table()
 
 # Simulated equity-index annual returns for FIA crediting
 rng = random.Random(SEED)
-INDEX_RATES = [rng.gauss(0.05, 0.10) for _ in range(20)]
+INDEX_RETURNS = [rng.gauss(0.05, 0.10) for _ in range(20)]
 
 # ── Block Definitions ─────────────────────────────────────────────
 blocks = {
@@ -72,7 +72,7 @@ blocks = {
         discount_rate=DISCOUNT_RATE,
         n_policies=N_POLICIES,
         seed=SEED,
-        index_rates=INDEX_RATES,
+        index_returns=INDEX_RETURNS,
     ),
 }
 
@@ -96,7 +96,9 @@ for name, block in blocks.items():
     premium = block.premium
     max_year = max(liab_cf["year"].max(), asset_cf["year"].max())
 
-    # PV: discount aggregated annual cashflows at the block rate
+    # PV: discount aggregated annual cashflows at the block (risk-free) rate.  Asset PV on
+    # this basis exceeds purchase cost by the spread income the block expects to earn; the
+    # surplus below is therefore a promised-yield figure with zero defaults assumed.
     pv_liab = sum(
         cf / (1 + DISCOUNT_RATE) ** yr
         for yr, cf in zip(liab_cf["year"], liab_cf["cashflow"], strict=True)
@@ -130,7 +132,7 @@ for name, block in blocks.items():
             "pv_liab": pv_liab,
             "pv_asset": pv_asset,
             "pv_surplus": pv_asset - pv_liab,
-            "profit_margin": pv_asset / pv_liab - 1,
+            "pv_surplus_pct": pv_asset / pv_liab - 1,
             "asset_irr": asset_irr,
         }
     )
