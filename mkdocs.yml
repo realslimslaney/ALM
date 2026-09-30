@@ -32,6 +32,7 @@ nav:
       - Getting Started: how-to/getting-started.md
       - Running Scripts: how-to/running-scripts.md
       - Creating Quarto Reports: how-to/creating-quarto-reports.md
+      - Cross-Review a Change: how-to/how-to-cross-review-a-change.md
   - Reference:
       - Project Structure: reference/project-structure.md
       - Fixed-Income Concepts: reference/fixed-income.md

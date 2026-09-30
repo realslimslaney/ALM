@@ -219,3 +219,6 @@ docs/reference/ref-*.html
 
 # Other
 settings.local.json
+
+# Local tool state (cross-review sessions live in .scratch/cross-review/); never committed
+.scratch/

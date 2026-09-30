@@ -1,0 +1,6 @@
+# Keep checkouts and generated files consistent across Windows and Unix.
+* text=auto eol=lf
+
+# Windows command scripts retain their native line endings.
+*.bat text eol=crlf
+*.cmd text eol=crlf

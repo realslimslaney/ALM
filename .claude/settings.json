@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(just cross-review *)",
+      "PowerShell(just cross-review *)",
+      "Edit(/.scratch/cross-review/**)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|PowerShell",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uv run --no-sync python \"$CLAUDE_PROJECT_DIR/.claude/hooks/gate_commit.py\"",
+            "timeout": 300
+          }
+        ]
+      }
+    ]
+  }
+}
