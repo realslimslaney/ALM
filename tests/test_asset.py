@@ -78,6 +78,36 @@ class TestBond:
         pv = bond.present_value(0.05)
         assert pv == pytest.approx(1000.0, rel=1e-6)
 
+    # --- Parametrized edge cases ---
+
+    @pytest.mark.parametrize(
+        ("coupon_rate", "discount_rate", "relation"),
+        [
+            (0.00, 0.05, "below"),  # zero-coupon trades below par
+            (0.02, 0.08, "below"),  # deep discount
+            (0.08, 0.03, "above"),  # premium bond
+        ],
+    )
+    def test_pv_edge_cases(self, coupon_rate, discount_rate, relation):
+        bond = Bond(face_value=1000, coupon_rate=coupon_rate, maturity=5, frequency=2)
+        pv = bond.present_value(discount_rate)
+        if relation == "below":
+            assert pv < 1000.0
+        else:
+            assert pv > 1000.0
+
+    def test_zero_coupon_duration_equals_maturity(self):
+        bond = Bond(face_value=1000, coupon_rate=0.0, maturity=5, frequency=2)
+        d = bond.duration(0.05)
+        assert d == pytest.approx(5.0, rel=1e-6)
+
+    def test_zero_coupon_pv_closed_form(self):
+        """PV of a zero-coupon bond should match 1000 / (1 + r/f)^(n*f)."""
+        bond = Bond(face_value=1000, coupon_rate=0.0, maturity=5, frequency=2)
+        r = 0.06
+        expected = 1000 / (1 + r / 2) ** 10
+        assert bond.present_value(r) == pytest.approx(expected, rel=1e-6)
+
 
 # ---------------------------------------------------------------------------
 # Mortgage

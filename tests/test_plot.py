@@ -1,24 +1,9 @@
-"""Tests for alm.plot module (line_chart, bar_chart)."""
+"""Tests for alm.plot module (line_chart, bar_chart, area_chart)."""
 
 import plotly.graph_objects as go
 import polars as pl
-import pytest
 
-from alm.plot import PALETTE, bar_chart, line_chart
-
-
-@pytest.fixture()
-def sample_df() -> pl.DataFrame:
-    """Simple DataFrame for chart tests."""
-    return pl.DataFrame(
-        {
-            "year": [1, 2, 3, 4],
-            "assets": [100.0, 105.0, 110.0, 115.0],
-            "liabilities": [90.0, 92.0, 95.0, 98.0],
-            "group": ["A", "A", "B", "B"],
-        }
-    )
-
+from alm.plot import PALETTE, area_chart, bar_chart, line_chart
 
 # ---------------------------------------------------------------------------
 # line_chart
@@ -95,6 +80,41 @@ class TestBarChart:
     def test_barmode_stack(self, sample_df: pl.DataFrame):
         fig = bar_chart(sample_df, x="year", y=["assets", "liabilities"], barmode="stack")
         assert fig.layout.barmode == "stack"
+
+
+# ---------------------------------------------------------------------------
+# area_chart
+# ---------------------------------------------------------------------------
+
+
+class TestAreaChart:
+    """Tests for area_chart."""
+
+    def test_returns_figure(self, sample_df: pl.DataFrame):
+        fig = area_chart(sample_df, x="year", y=["assets", "liabilities"])
+        assert isinstance(fig, go.Figure)
+
+    def test_trace_count_matches_y(self, sample_df: pl.DataFrame):
+        fig = area_chart(sample_df, x="year", y=["assets", "liabilities"])
+        assert len(fig.data) == 2
+
+    def test_stacked_sets_stackgroup(self, sample_df: pl.DataFrame):
+        fig = area_chart(sample_df, x="year", y=["assets", "liabilities"], stacked=True)
+        for trace in fig.data:
+            assert trace.stackgroup == "one"
+
+    def test_unstacked_no_stackgroup(self, sample_df: pl.DataFrame):
+        fig = area_chart(sample_df, x="year", y=["assets", "liabilities"], stacked=False)
+        for trace in fig.data:
+            assert trace.stackgroup is None
+
+    def test_title_propagates(self, sample_df: pl.DataFrame):
+        fig = area_chart(sample_df, x="year", y=["assets"], title="Area Title")
+        assert fig.layout.title.text == "Area Title"
+
+    def test_currency_format(self, sample_df: pl.DataFrame):
+        fig = area_chart(sample_df, x="year", y=["assets"], yformat="$")
+        assert fig.layout.yaxis.tickprefix == "$"
 
 
 # ---------------------------------------------------------------------------

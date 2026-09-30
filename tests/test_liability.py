@@ -1,19 +1,13 @@
-"""Tests for alm.liability module (SPIA, WL, Term, FIA, qx_from_table)."""
+"""Tests for alm.liability module."""
+
+import logging
 
 import polars as pl
 import pytest
 
-from alm.liability import FIA, SPIA, WL, Term, qx_from_table
+from alm.liability import FIA, SPIA, WL, Term, _survival_prob, _validate_qx, qx_from_table
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _flat_qx(rate: float, years: int) -> list[float]:
-    """Return a flat mortality-rate vector."""
-    return [rate] * years
-
+from .conftest import flat_qx
 
 # ---------------------------------------------------------------------------
 # qx_from_table
@@ -66,6 +60,85 @@ class TestQxFromTable:
 
 
 # ---------------------------------------------------------------------------
+# _validate_qx
+# ---------------------------------------------------------------------------
+
+
+class TestValidateQx:
+    """Tests for the _validate_qx helper."""
+
+    def test_valid_qx_no_warnings(self, caplog):
+        with caplog.at_level(logging.WARNING, logger="alm.liability"):
+            _validate_qx([0.0, 0.01, 0.1, 0.5])
+        assert caplog.text == ""
+
+    def test_qx_above_one_warns(self, caplog):
+        with caplog.at_level(logging.WARNING, logger="alm.liability"):
+            _validate_qx([1.5])
+        assert "outside [0, 1]" in caplog.text
+
+    def test_qx_below_zero_warns(self, caplog):
+        with caplog.at_level(logging.WARNING, logger="alm.liability"):
+            _validate_qx([-0.1])
+        assert "outside [0, 1]" in caplog.text
+
+    def test_qx_above_half_warns(self, caplog):
+        with caplog.at_level(logging.WARNING, logger="alm.liability"):
+            _validate_qx([0.6])
+        assert "unusually high" in caplog.text
+
+    def test_empty_list_no_warnings(self, caplog):
+        with caplog.at_level(logging.WARNING, logger="alm.liability"):
+            _validate_qx([])
+        assert caplog.text == ""
+
+
+# ---------------------------------------------------------------------------
+# _survival_prob
+# ---------------------------------------------------------------------------
+
+
+class TestSurvivalProb:
+    """Tests for the _survival_prob helper."""
+
+    def test_t_zero_returns_one(self):
+        assert _survival_prob([0.1, 0.2], 0) == pytest.approx(1.0)
+
+    def test_one_year(self):
+        assert _survival_prob([0.1], 1.0) == pytest.approx(0.9)
+
+    def test_two_years(self):
+        assert _survival_prob([0.1, 0.1], 2.0) == pytest.approx(0.81)
+
+    def test_fractional_year_udd(self):
+        """UDD: S(0.5) = 1 - 0.5 * 0.1 = 0.95."""
+        assert _survival_prob([0.1], 0.5) == pytest.approx(0.95)
+
+    def test_zero_mortality_returns_one(self):
+        assert _survival_prob([0.0, 0.0, 0.0], 3.0) == pytest.approx(1.0)
+
+    def test_certain_death(self):
+        assert _survival_prob([1.0], 1.0) == pytest.approx(0.0)
+
+    @pytest.mark.parametrize(
+        ("qx", "t", "expected"),
+        [
+            ([0.05], 1.0, 0.95),
+            ([0.05, 0.10], 2.0, 0.855),
+            ([0.0, 0.0], 1.5, 1.0),
+        ],
+    )
+    def test_parametrized_cases(self, qx, t, expected):
+        assert _survival_prob(qx, t) == pytest.approx(expected)
+
+    def test_t_beyond_qx_len(self):
+        """Beyond len(qx), no further mortality is applied."""
+        sp_at_end = _survival_prob([0.1], 1.0)
+        sp_beyond = _survival_prob([0.1], 5.0)
+        assert sp_beyond == pytest.approx(sp_at_end)
+
+
+# ---------------------------------------------------------------------------
 # SPIA
 # ---------------------------------------------------------------------------
 
@@ -79,7 +152,7 @@ class TestSPIA:
         return SPIA(
             premium=100_000,
             annual_payout=6_000,
-            qx=_flat_qx(0.01, 30),
+            qx=flat_qx(0.01, 30),
             frequency=12,
             certain_period=0,
         )
@@ -101,7 +174,7 @@ class TestSPIA:
         spia_cp = SPIA(
             premium=100_000,
             annual_payout=6_000,
-            qx=_flat_qx(0.05, 10),
+            qx=flat_qx(0.05, 10),
             frequency=12,
             certain_period=5,
         )
@@ -120,6 +193,33 @@ class TestSPIA:
     def test_convexity_positive(self, spia: SPIA):
         assert spia.convexity(0.05) > 0
 
+    def test_immortal_expected_payout_constant(self):
+        """Zero mortality means every expected payout equals the per-period amount."""
+        spia = SPIA(
+            premium=100_000,
+            annual_payout=12_000,
+            qx=flat_qx(0.0, 10),
+            frequency=12,
+            certain_period=0,
+        )
+        cf = spia.cashflows()
+        pmt = 12_000 / 12
+        assert all(v == pytest.approx(pmt) for v in cf["expected_payout"].to_list())
+
+    def test_certain_death_zeroes_payout(self):
+        """qx=1 means survival probability drops to zero immediately."""
+        spia = SPIA(
+            premium=100_000,
+            annual_payout=6_000,
+            qx=flat_qx(1.0, 5),
+            frequency=12,
+            certain_period=0,
+        )
+        cf = spia.cashflows()
+        # After the first year, expected payouts should be essentially zero
+        late = cf.filter(pl.col("year") > 1.0)
+        assert all(v == pytest.approx(0.0, abs=1e-10) for v in late["expected_payout"].to_list())
+
 
 # ---------------------------------------------------------------------------
 # WL – Whole Life
@@ -134,7 +234,7 @@ class TestWL:
         return WL(
             face_value=100_000,
             annual_premium=1_200,
-            qx=_flat_qx(0.01, 30),
+            qx=flat_qx(0.01, 30),
             frequency=12,
         )
 
@@ -165,6 +265,37 @@ class TestWL:
     def test_convexity_returns_float(self, wl: WL):
         assert isinstance(wl.convexity(0.05), float)
 
+    # --- WL.from_face tests ---
+
+    def test_from_face_returns_wl(self):
+        qx = flat_qx(0.01, 30)
+        wl = WL.from_face(face_value=100_000, qx=qx, discount_rate=0.05)
+        assert isinstance(wl, WL)
+        assert wl.face_value == 100_000
+
+    def test_from_face_premium_positive(self):
+        qx = flat_qx(0.01, 30)
+        wl = WL.from_face(face_value=100_000, qx=qx, discount_rate=0.05)
+        assert wl.annual_premium > 0
+
+    def test_from_face_equivalence_principle(self):
+        """PV of net cashflows at the pricing rate should be approximately zero."""
+        qx = flat_qx(0.01, 30)
+        wl = WL.from_face(face_value=100_000, qx=qx, discount_rate=0.05)
+        pv = wl.present_value(0.05)
+        assert pv == pytest.approx(0.0, abs=1.0)
+
+    def test_from_face_higher_mortality_higher_premium(self):
+        """Higher mortality should produce a higher premium."""
+        low = WL.from_face(face_value=100_000, qx=flat_qx(0.005, 30), discount_rate=0.05)
+        high = WL.from_face(face_value=100_000, qx=flat_qx(0.02, 30), discount_rate=0.05)
+        assert high.annual_premium > low.annual_premium
+
+    def test_from_face_age_passthrough(self):
+        qx = flat_qx(0.01, 30)
+        wl = WL.from_face(face_value=100_000, qx=qx, discount_rate=0.05, age=45)
+        assert wl.age == 45
+
 
 # ---------------------------------------------------------------------------
 # Term
@@ -180,7 +311,7 @@ class TestTerm:
             face_value=500_000,
             annual_premium=600,
             term=20,
-            qx=_flat_qx(0.005, 30),
+            qx=flat_qx(0.005, 30),
             frequency=12,
         )
 
@@ -216,7 +347,7 @@ class TestFIA:
         return FIA(
             premium=100_000,
             term=7,
-            qx=_flat_qx(0.01, 10),
+            qx=flat_qx(0.01, 10),
             floor=0.0,
             cap=0.06,
             participation_rate=1.0,

@@ -15,6 +15,7 @@ from alm.read import (
     get_2012_iam_table,
     get_credit_spreads,
     get_spread,
+    get_treasury_rates,
     read_credit_spread_indices,
     read_mortality_table,
     read_treasury_rates,
@@ -395,3 +396,60 @@ class TestUpdateCreditSpreads:
             "BB",
             "B",
         ]
+
+
+# ---------- get_treasury_rates ----------
+class TestGetTreasuryRates:
+    """Tests for get_treasury_rates (cached wrapper around read_treasury_rates)."""
+
+    def _make_treasury_csv(self, tmp_path):
+        """Write a minimal cached treasury CSV and return its path."""
+        df = pl.DataFrame({"date": ["2025-01-02"], "10Y": [4.5]})
+        csv_path = tmp_path / "treasury_rates.csv"
+        df.write_csv(csv_path)
+        return csv_path
+
+    def test_cache_hit(self, tmp_path, monkeypatch):
+        """Reads from CSV when file exists and refresh=False."""
+        self._make_treasury_csv(tmp_path)
+        monkeypatch.setattr("alm.read._ASSUMPTIONS_DIR", tmp_path)
+
+        result = get_treasury_rates(refresh=False)
+        assert isinstance(result, pl.DataFrame)
+        assert "10Y" in result.columns
+
+    def test_cache_miss_fetches(self, tmp_path, monkeypatch):
+        """Calls read_treasury_rates and writes CSV when no cache file."""
+        monkeypatch.setattr("alm.read._ASSUMPTIONS_DIR", tmp_path)
+
+        dates = ["2025-01-02"]
+        series_map = {sid: _make_mock_series(dates, [4.0]) for sid in _TREASURY_SERIES.values()}
+
+        with _patch_fred(series_map):
+            result = get_treasury_rates(refresh=False)
+
+        assert isinstance(result, pl.DataFrame)
+        assert (tmp_path / "treasury_rates.csv").exists()
+
+    def test_refresh_refetches(self, tmp_path, monkeypatch):
+        """refresh=True re-fetches even when cache exists."""
+        self._make_treasury_csv(tmp_path)
+        monkeypatch.setattr("alm.read._ASSUMPTIONS_DIR", tmp_path)
+
+        dates = ["2025-01-02", "2025-01-03"]
+        series_map = {
+            sid: _make_mock_series(dates, [4.0, 4.1]) for sid in _TREASURY_SERIES.values()
+        }
+
+        with _patch_fred(series_map):
+            result = get_treasury_rates(refresh=True)
+
+        # The refreshed result has 2 rows, not the 1 row from the old cache
+        assert result.shape[0] == 2
+
+    def test_returns_polars_dataframe(self, tmp_path, monkeypatch):
+        """Return type is always pl.DataFrame."""
+        self._make_treasury_csv(tmp_path)
+        monkeypatch.setattr("alm.read._ASSUMPTIONS_DIR", tmp_path)
+        result = get_treasury_rates(refresh=False)
+        assert isinstance(result, pl.DataFrame)

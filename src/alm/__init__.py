@@ -17,6 +17,12 @@ from alm.liability import FIA as FIA
 from alm.liability import SPIA as SPIA
 from alm.liability import WL as WL
 from alm.liability import Term as Term
+from alm.option import CallOption as CallOption
+from alm.option import PutOption as PutOption
+from alm.option import bs_call as bs_call
+from alm.option import bs_greeks as bs_greeks
+from alm.option import bs_put as bs_put
+from alm.option import implied_vol as implied_vol
 from alm.read import get_credit_spreads as get_credit_spreads
 from alm.read import get_spread as get_spread
 from alm.read import get_treasury_rates as get_treasury_rates
