@@ -105,16 +105,22 @@ change and zero convexity, making the hedge matrix singular.
 
 ```python
 # Correct: floating rates move with the discount rate
-dc_5y = dollar_convexity(
-    lambda r: swap_5y.present_value([r] * swap_5y.n_periods, r),
-    discount_rate,
-) / swap_5y.notional
+dc_5y = (
+    dollar_convexity(
+        lambda r: swap_5y.present_value([r] * swap_5y.n_periods, r),
+        discount_rate,
+    )
+    / swap_5y.notional
+)
 
 # Wrong: floating rates are frozen — convexity ≈ 0
-dc_5y = dollar_convexity(
-    lambda r: swap_5y.present_value(flat_floats, r),
-    discount_rate,
-) / swap_5y.notional
+dc_5y = (
+    dollar_convexity(
+        lambda r: swap_5y.present_value(flat_floats, r),
+        discount_rate,
+    )
+    / swap_5y.notional
+)
 ```
 
 ---
@@ -183,27 +189,30 @@ the hedge.  A well-immunized portfolio should show:
 
 ```python
 from alm.core import (
-    InterestRateSwap, dv01, dollar_convexity, immunize,
+    InterestRateSwap,
+    dv01,
+    dollar_convexity,
+    immunize,
 )
 
 DISCOUNT_RATE = 0.04
 
 # 1. Measure gaps (computed from your asset/liability portfolio)
 asset_dv01 = sum(dv01(a.present_value, DISCOUNT_RATE) for a in assets)
-liab_dv01  = sum(dv01(l.present_value, DISCOUNT_RATE) for l in liabilities)
+liab_dv01 = sum(dv01(l.present_value, DISCOUNT_RATE) for l in liabilities)
 dd_gap = liab_dv01 - asset_dv01
 
 asset_dc = sum(dollar_convexity(a.present_value, DISCOUNT_RATE) for a in assets)
-liab_dc  = sum(dollar_convexity(l.present_value, DISCOUNT_RATE) for l in liabilities)
+liab_dc = sum(dollar_convexity(l.present_value, DISCOUNT_RATE) for l in liabilities)
 dc_gap = liab_dc - asset_dc
 
 # 2. Define hedging instruments
-swap_5y  = InterestRateSwap(notional=1, fixed_rate=0.04, tenor=5,  pay_fixed=False)
+swap_5y = InterestRateSwap(notional=1, fixed_rate=0.04, tenor=5, pay_fixed=False)
 swap_10y = InterestRateSwap(notional=1, fixed_rate=0.04, tenor=10, pay_fixed=False)
 
 # 3. Compute per-unit sensitivities (parallel shift convention)
-dd_5y  = swap_5y.dv01([0.04] * swap_5y.n_periods, DISCOUNT_RATE)
-dc_5y  = dollar_convexity(
+dd_5y = swap_5y.dv01([0.04] * swap_5y.n_periods, DISCOUNT_RATE)
+dc_5y = dollar_convexity(
     lambda r: swap_5y.present_value([r] * swap_5y.n_periods, r),
     DISCOUNT_RATE,
 )
