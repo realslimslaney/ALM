@@ -45,16 +45,21 @@ Only add keys that override `_quarto.yaml`. Give the title a meaning a stranger 
 - Import the package directly (`from alm.asset import Bond`); `uv sync` installs `alm` in
   editable mode, so no `sys.path` manipulation is needed.
 - Use `polars`, never `pandas`; `great_tables.GT` for tables; `plotly` for charts.
-- Set the plotly renderer once in the setup cell so plotly.js is embedded a single time:
+- Select the shared renderer once in the setup cell:
 
 ```python
-import plotly.io as pio
+from alm import plot
 
-pio.renderers.default = "plotly_mimetype+notebook"
+plot.use_quarto_renderer()
 ```
 
-  Never use `notebook_connected+vscode` with `embed-resources`; it embeds plotly.js per
-  figure and produced an 82 MB file.
+  It embeds plotly.js once per page, strips the per-figure MathJax script tag that plotly 7
+  injects (Quarto's `embed-resources` inlined 2 MB of MathJax per figure and fetched it from a
+  CDN on every render), and switches to `png` for PDF output. Never set `pio.renderers.default`
+  by hand in a report.
+- The sample insurer used by the deck and the README lives in `alm.examples`
+  (`lecture_book()`, `LectureBook.two_swap_hedge()`); reports bind to it rather than
+  redefining instruments, so every published number has one source.
 - Named cells (`#| label: name`), one table or chart per cell, narrative between cells.
 - Every number in the prose comes from a computed variable, not a typed literal, so the
   text cannot drift from the code.

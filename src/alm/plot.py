@@ -2,8 +2,13 @@
 
 from __future__ import annotations
 
+import os
+import re
+
 import plotly.graph_objects as go
+import plotly.io as pio
 import polars as pl
+from plotly.io.base_renderers import NotebookRenderer
 
 # ---------------------------------------------------------------------------
 # Styling
@@ -51,6 +56,56 @@ def _fmt(fmt: str | None) -> dict:
     if fmt == "#":
         return dict(tickformat=",.0f", hoverformat=",.0f")
     return {}
+
+
+# ---------------------------------------------------------------------------
+# Quarto renderer
+# ---------------------------------------------------------------------------
+
+_MATHJAX_TAG = re.compile(r'<script src="[^"]*mathjax[^"]*"></script>')
+QUARTO_RENDERER = "plotly_mimetype+notebook_nomathjax"
+
+
+class _NotebookNoMathJax(NotebookRenderer):
+    """The ``notebook`` renderer without the per-figure MathJax script tag.
+
+    plotly embeds plotly.js once per document through this renderer, but
+    every figure's HTML also carries a ``<script src=".../mathjax...">`` tag.
+    Quarto's ``embed-resources`` then downloads and inlines about 2 MB of
+    MathJax for each figure, which bloated reports and made every render
+    fetch from a CDN.  The charts here use no LaTeX, so the tag is dropped.
+    """
+
+    def to_mimebundle(self, fig_dict: dict) -> dict:
+        bundle = super().to_mimebundle(fig_dict)
+        bundle["text/html"] = _MATHJAX_TAG.sub("", bundle["text/html"])
+        return bundle
+
+
+def use_quarto_renderer(pdf: bool | None = None) -> str:
+    """Select the plotly renderer every Quarto report in this repo uses.
+
+    HTML output gets :data:`QUARTO_RENDERER` (plotly.js embedded once, no
+    MathJax, interactive charts); PDF output gets static ``png`` figures.
+    Call it once in a report's setup cell.
+
+    Parameters
+    ----------
+    pdf : bool, optional
+        Force PDF (``True``) or HTML (``False``) mode.  Defaults to reading
+        Quarto's ``QUARTO_PROJECT_OUTPUT_FORMAT`` environment variable.
+
+    Returns
+    -------
+    str
+        The renderer name that was selected.
+    """
+    if "notebook_nomathjax" not in pio.renderers:
+        pio.renderers["notebook_nomathjax"] = _NotebookNoMathJax()
+    if pdf is None:
+        pdf = os.environ.get("QUARTO_PROJECT_OUTPUT_FORMAT") == "pdf"
+    pio.renderers.default = "png" if pdf else QUARTO_RENDERER
+    return pio.renderers.default
 
 
 # ---------------------------------------------------------------------------

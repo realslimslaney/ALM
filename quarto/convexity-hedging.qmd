@@ -38,6 +38,10 @@ if IS_PDF:
     import matplotlib.ticker as mticker
 else:
     import plotly.graph_objects as go
+
+    from alm import plot
+
+    plot.use_quarto_renderer(pdf=False)  # plotly.js once per page, no MathJax
 ```
 
 ## Step 1 — Build the portfolio

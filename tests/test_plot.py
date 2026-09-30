@@ -1,9 +1,17 @@
 """Tests for alm.plot module (line_chart, bar_chart, area_chart)."""
 
 import plotly.graph_objects as go
+import plotly.io as pio
 import polars as pl
 
-from alm.plot import PALETTE, area_chart, bar_chart, line_chart
+from alm.plot import (
+    PALETTE,
+    QUARTO_RENDERER,
+    area_chart,
+    bar_chart,
+    line_chart,
+    use_quarto_renderer,
+)
 
 # ---------------------------------------------------------------------------
 # line_chart
@@ -124,3 +132,43 @@ class TestAreaChart:
 
 def test_palette_has_enough_colors():
     assert len(PALETTE) >= 10
+
+
+# ---------------------------------------------------------------------------
+# use_quarto_renderer
+# ---------------------------------------------------------------------------
+
+
+class TestQuartoRenderer:
+    """The shared Quarto renderer embeds no MathJax and switches to png for PDF."""
+
+    def test_html_mode_selects_shared_renderer(self, sample_df: pl.DataFrame):
+        previous = pio.renderers.default
+        try:
+            assert use_quarto_renderer(pdf=False) == QUARTO_RENDERER
+            assert pio.renderers.default == QUARTO_RENDERER
+            fig = line_chart(sample_df, x="year", y="assets")
+            bundle = pio.renderers["notebook_nomathjax"].to_mimebundle(fig.to_dict())
+            assert (
+                "mathjax/" not in bundle["text/html"].lower()
+            )  # no CDN script; inline config is fine
+            assert "plotly" in bundle["text/html"].lower()
+        finally:
+            pio.renderers.default = previous
+
+    def test_pdf_mode_selects_png(self):
+        previous = pio.renderers.default
+        try:
+            assert use_quarto_renderer(pdf=True) == "png"
+        finally:
+            pio.renderers.default = previous
+
+    def test_reads_quarto_environment(self, monkeypatch):
+        previous = pio.renderers.default
+        try:
+            monkeypatch.setenv("QUARTO_PROJECT_OUTPUT_FORMAT", "pdf")
+            assert use_quarto_renderer() == "png"
+            monkeypatch.setenv("QUARTO_PROJECT_OUTPUT_FORMAT", "html")
+            assert use_quarto_renderer() == QUARTO_RENDERER
+        finally:
+            pio.renderers.default = previous

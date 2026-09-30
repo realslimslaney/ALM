@@ -28,14 +28,8 @@ format:
 ```{python}
 #| label: setup
 #| echo: false
-import sys
-from pathlib import Path
-
 import polars as pl
-import plotly.io as pio
-import os
 
-sys.path.insert(0, str((Path.cwd().parent.parent) / "src"))
 from alm.liability import WL, qx_from_table
 from alm.core import dv01, dollar_convexity
 from alm.read import get_2012_iam_table
@@ -43,11 +37,7 @@ from alm import plot
 
 from great_tables import GT, style, loc
 
-pdf_bool = os.environ.get("QUARTO_PROJECT_OUTPUT_FORMAT") == "pdf"
-if pdf_bool:
-    pio.renderers.default = "png"
-else:
-    pio.renderers.default = "notebook"
+plot.use_quarto_renderer()  # plotly.js once per page, no MathJax, png for PDF
 
 BRAND = "#2563eb"
 DISCOUNT_RATE = 0.04
