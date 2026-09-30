@@ -208,17 +208,21 @@ __marimo__/
 
 # Quarto helper files
 *.ipynb
-nul
 quarto/_freeze/*
 *_files
 quarto/**/mathjax.js
 mathjax.js
 
-# Quarto rendered HTML in docs (build artifacts)
+# Quarto rendered output (build artifacts; GitHub Pages renders the deck in CI)
 docs/reference/ref-*.html
+quarto/*.html
+quarto/*.pdf
 
 # Other
 settings.local.json
 
 # Local tool state (cross-review sessions live in .scratch/cross-review/); never committed
 .scratch/
+
+# Per-agent memory written by Claude subagents; local only (matches the sibling repos)
+.claude/agent-memory/

@@ -29,10 +29,11 @@ Quarto (`.qmd`) files in `quarto/` are used to generate reports and graphs.
 
 ```bash
 just render-one your_report        # single report to HTML
-just render-one-pdf your_report    # single report to PDF
 just render                        # all reports to HTML
-just render-pdf                    # all reports to PDF
+just render-refs                   # executable reference pages in docs/reference/
 ```
 
-> **PDF output** requires a LaTeX distribution. Install TinyTeX via Quarto:
-> `quarto install tinytex`
+Rendered output (`quarto/*.html`) is gitignored; GitHub Pages renders and publishes the
+reports from `.github/workflows/docs.yml`. A report must render offline: never fetch FRED
+inside a report. Reports read the committed `assumptions/credit_spreads.csv`, which only
+`just refresh-spreads` updates.

@@ -406,10 +406,6 @@ class InterestRateSwap:
 # Block of Business
 # ---------------------------------------------------------------------------
 
-# Type aliases
-AssetInstrument = "Bond | Mortgage | PrivateCredit"
-LiabilityInstrument = "SPIA | WL | Term | FIA"
-
 
 @dataclass
 class Block:

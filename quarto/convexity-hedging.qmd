@@ -15,18 +15,13 @@ execute:
 
 Duration matching eliminates first-order interest-rate risk, but the
 hedge breaks down for larger rate moves because assets and liabilities
-have different *convexity*.  This tutorial extends the
-[duration-hedging example](duration-hedging-with-swaps.qmd) by
-matching **both** duration and convexity using two swap tenors and the
-`immunize()` solver.
+have different *convexity*.  This appendix builds a small portfolio, sizes a
+single-swap duration hedge, shows where it breaks down, and then matches
+**both** DV01 and dollar convexity using two swap tenors and the `immunize()`
+solver.
 
 ```{python}
 import os
-import sys
-from pathlib import Path
-
-# make the alm package importable when running from docs/tutorial/
-sys.path.insert(0, str(Path.cwd().parents[1] / "src"))
 
 import polars as pl
 from great_tables import GT
@@ -47,7 +42,7 @@ else:
 
 ## Step 1 — Build the portfolio
 
-We reuse the same portfolio from the duration-hedging tutorial.
+We start from a small asset and liability portfolio.
 
 ### Assets
 

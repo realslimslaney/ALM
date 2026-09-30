@@ -8,24 +8,17 @@ summary cashflow statistics.
 import logging
 import random
 import sys
-from pathlib import Path
 
 import coloredlogs
 import polars as pl
 
 from alm.core import Block, default_saa, irr, spia_saa, term_saa
-from alm.read import get_2012_iam_table, update_credit_spreads
+from alm.read import get_2012_iam_table
 
 sys.stdout.reconfigure(encoding="utf-8")
 coloredlogs.install(level="INFO", fmt="%(asctime)s %(levelname)s %(name)s %(message)s")
 logger = logging.getLogger(__name__)
 
-
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
-
-
-# ── Refresh Assumptions ───────────────────────────────────────────
-update_credit_spreads()
 
 # ── Parameters ────────────────────────────────────────────────────
 DISCOUNT_RATE = 0.04
