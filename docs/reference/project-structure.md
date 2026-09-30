@@ -1,37 +1,124 @@
 # Project Structure
 
-## `src/alm/`
-
-The core Python package. All reusable functions and modules live here. Import with:
-
-```python
-import alm
-from alm import module_name
+```
+ALM/
+├── src/alm/                 # importable package (installed editable by `uv sync`)
+├── scripts/                 # entry-point scripts run with `just run <name>`
+├── quarto/                  # Quarto reports: the deck and the convexity appendix
+├── docs/                    # MkDocs site (Diataxis): how-to/, reference/
+├── tests/                   # pytest; synthetic data; FRED mocked; no network
+├── assumptions/             # credit_spreads.csv, the committed FRED snapshot
+├── data/soa_tables/         # SOA 2012 IAM Basic ANB mortality tables
+├── images/                  # static images used by the README and docs
+├── justfile                 # task runner recipes (`just` lists them)
+├── .claude/                 # Claude Code instructions, agents, skills, hooks
+├── .codex/agents/           # hand-written Codex ports of two Claude agents
+└── .agents/skills/          # generated Codex mirrors of .claude/skills
 ```
 
-Add a new reference page under `docs/reference/` for each major module or process added to this package.
+## `src/alm/`
+
+The core Python package.  All reusable functions and modules live here; `uv sync` installs it
+editable, so scripts and Quarto pages import it with no path manipulation:
+
+```python
+from alm.asset import Bond
+from alm.core import InterestRateSwap, dv01
+```
+
+| Module | Contents |
+|--------|----------|
+| `asset.py` | `Bond`, `Mortgage`, `PrivateCredit`: cash flows, PV, duration, convexity |
+| `liability.py` | `SPIA`, `WL`, `Term`, `FIA` policies; `qx_from_table` |
+| `core.py` | `SAA`, `Block`, `InterestRateSwap`, `dv01`, `dollar_convexity`, `immunize`, `irr` |
+| `option.py` | Black-Scholes European options; the FIA crediting call spread (`call_spread_cost`, `solve_cap`) |
+| `examples.py` | The deck's sample insurer (`lecture_book`) and its two-swap hedge, shared with the README chart |
+| `read.py` | FRED Treasury rates and credit spreads; SOA 2012 IAM table |
+| `plot.py` | plotly line/bar/area helpers; `use_quarto_renderer` (the one renderer every report uses) |
+| `utils.py` | `get_project_root` |
+
+Add a reference page under `docs/reference/` for each major module or process added here.
 
 ## `scripts/`
 
-Standalone Python scripts that use the `alm` package to perform specific tasks (e.g. running a model, generating output). These are not importable — they are entry points.
+Standalone entry points that use the `alm` package.  They are not importable.  Run one with
+`uv run python scripts/<name>.py` or `just run <name>`.
+
+| Script | Purpose |
+|--------|---------|
+| `run_alm_demonstration.py` | Offline block simulation: one `Block` per liability type with its backing assets |
+| `refresh_spreads.py` | Rewrites `assumptions/credit_spreads.csv` from FRED; the only writer of that file |
+| `fixed_income_examples.py` | Prints every number in the [fixed-income reference](fixed-income.md) |
+| `make_readme_chart.py` | Regenerates `images/surplus_vs_shock.png` and the README headline table from `alm.examples` |
+| `cross_review.py` | Drives the cross-review exchange with the other AI (see the how-to) |
+| `sync_codex_skills.py` | Regenerates the Codex mirrors in `.agents/skills/` |
 
 ## `quarto/`
 
-Quarto `.qmd` files for generating reports, visualizations, and graphs. Each file typically imports from `alm` and produces rendered HTML or PDF output.
+Quarto `.qmd` reports: `ua_presentation.qmd` (the flagship deck) and `convexity-hedging.qmd`
+(its appendix).  Rendered output (`quarto/*.html`, `*.pdf`) is gitignored; GitHub Pages renders
+and publishes it from `.github/workflows/docs.yml`.  A report must render offline and never
+fetches FRED.
+
+## `docs/`
+
+Project documentation following the [Diataxis](https://diataxis.fr/) framework, built by
+MkDocs (`mkdocs.yml`) and deployed with the deck:
+
+| Section    | Purpose                                          |
+|------------|--------------------------------------------------|
+| how-to/    | Step-by-step guides for accomplishing tasks      |
+| reference/ | Technical descriptions of modules and processes  |
+
+The reference pages `ref-spia.qmd`, `ref-whole-life.qmd`, `ref-term-life.qmd` and `ref-fia.qmd`
+execute code.  `just render-refs` renders them to gitignored HTML next to the source; the
+matching `.md` stubs redirect to that HTML on the docs site.
 
 ## `tests/`
 
-Pytest test suite. Run with:
+Pytest test suite.  Tests use synthetic data, mock FRED, and need no network.  Run with:
 
 ```bash
 uv run pytest
 ```
 
+## `assumptions/`
+
+`credit_spreads.csv`: a snapshot of FRED credit spreads by rating and maturity, in basis
+points.  Reports, scripts and tests read it; only `just refresh-spreads` (which runs
+`scripts/refresh_spreads.py` and needs `FRED_API_KEY`) writes it.  Commit a refresh on its own.
+
+## `data/`
+
+`soa_tables/` holds the SOA 2012 IAM Basic ANB mortality tables, male (table 2581) and female
+(table 2582), as CSV.  `alm.read.get_2012_iam_table()` loads them.
+
+## `images/`
+
+`surplus_vs_shock.png`, the README's headline chart, generated by
+`scripts/make_readme_chart.py`; regenerate it whenever the sample insurer or the hedge changes.
+
+## `justfile`
+
+Task recipes for the [just](https://github.com/casey/just) runner: `check`, `test`, `lint`,
+`format`, `fix`, `render`, `render-one`, `render-refs`, `docs-serve`, `docs-build`, `run`,
+`refresh-spreads`, `cross-review`, `codex-skills-sync`, `codex-skills-check`.  Run `just` with
+no arguments to list them.
+
+## `.claude/`, `.codex/`, `.agents/`
+
+AI-assistant configuration.  `.claude/` holds `CLAUDE.md` (project rules), `agents/`,
+`skills/`, `hooks/` and `settings.json` for Claude Code.  `.codex/agents/` holds hand-written
+Codex ports of the committer and PR-manager agents.  `.agents/skills/` holds generated Codex
+mirrors of `.claude/skills/`; never edit them by hand, run `just codex-skills-sync` instead.
+
 ## Linting and Formatting
 
-Configured via `[tool.ruff]` in `pyproject.toml`. Uses [ruff](https://docs.astral.sh/ruff/) with the following rule sets: pycodestyle, pyflakes, isort, pyupgrade, bugbear, and simplify.
+Configured via `[tool.ruff]` in `pyproject.toml`.  Uses [ruff](https://docs.astral.sh/ruff/)
+with the following rule sets: pycodestyle, pyflakes, isort, pyupgrade, bugbear, and simplify,
+at a line length of 100.
 
-Pre-commit hooks run ruff automatically on each commit. Install them once with:
+Pre-commit hooks run ruff automatically on each commit.  Install them once with:
 
 ```bash
 uv run pre-commit install
@@ -43,12 +130,3 @@ To run manually:
 uv run ruff check .       # lint
 uv run ruff format .      # format
 ```
-
-## `docs/`
-
-Project documentation following the [Diataxis](https://diataxis.fr/) framework:
-
-| Section    | Purpose                                          |
-|------------|--------------------------------------------------|
-| how-to/    | Step-by-step guides for accomplishing tasks      |
-| reference/ | Technical descriptions of modules and processes  |

@@ -1,51 +1,109 @@
-# ALM
+# ALM: how an insurer keeps a rate move from wiping out its capital
 
-Educational toolkit demonstrating Asset-Liability Management (ALM) concepts for actuarial science students. Built as a personal project for illustrative purposes only — not intended for professional use, financial advice, or production decision-making.
+A life insurer promises payments decades out and backs them with bonds. When interest rates
+move, the two sides of its balance sheet reprice by different amounts, and the difference lands
+in surplus, the capital that keeps the company solvent. This repo is a small, tested Python model
+of that problem: it builds the liabilities (whole life, an immediate annuity, a fixed indexed
+annuity), the assets backing them (Treasuries, corporates, a mortgage loan, private credit), and
+the interest-rate swap hedge that keeps surplus stable when rates change.
 
-## Quick Start
+**Start with the deck:** [Protecting an Insurer's Surplus from Rate Moves](https://realslimslaney.github.io/ALM/quarto/ua_presentation.html),
+a guest lecture given at the University of Alabama in February 2026. The
+[convexity hedging appendix](https://realslimslaney.github.io/ALM/quarto/convexity-hedging.html)
+shows the two-swap solve step by step, and the [documentation site](https://realslimslaney.github.io/ALM/)
+has the reference pages.
 
-**Prerequisites:** Python 3.12+ and [uv](https://docs.astral.sh/uv/getting-started/installation/)
+## The result in one chart
+
+![Surplus after a parallel rate shock, unhedged versus hedged](images/surplus_vs_shock.png)
+
+The sample insurer holds $50M of assets against $46.3M of reserves. Its liabilities are longer
+than its assets, so a 100 bp fall in rates cuts surplus by more than half. Two swaps sized to
+match the DV01 and dollar convexity of the whole-life and annuity book hold surplus within a
+narrow band; what remains is the indexed annuity, which sits outside the rate hedge because its
+value depends on an equity index.
+
+| Measure | Value |
+|---|---|
+| Assets (at purchase price) | $50,000,000 |
+| Liabilities (whole life, SPIA, FIA reserves) | $46,292,300 |
+| Surplus | $3,707,700 |
+| Surplus after -100 bp, unhedged | $1,451,624 |
+| Surplus after +100 bp, unhedged | $5,317,463 |
+| Surplus after -100 bp, hedged | $3,393,426 |
+| Surplus after +100 bp, hedged | $3,987,607 |
+| Hedge: 5Y and 10Y swap notionals | -$229,079,997 and $145,671,328 (gross $374,751,326) |
+
+Chart and table are produced by `uv run python scripts/make_readme_chart.py` from the same
+sample insurer the deck uses (`src/alm/examples.py`), so they cannot drift from it.
+
+## What is in the package
+
+| Module | Contents |
+|---|---|
+| `alm.asset` | `Bond`, `Mortgage`, `PrivateCredit`: cash flows, present value, Macaulay duration, convexity |
+| `alm.liability` | `SPIA`, `WL`, `Term`, `FIA` policies on the SOA 2012 IAM mortality table; net level premiums by the equivalence principle |
+| `alm.core` | `InterestRateSwap`, `dv01`, `dollar_convexity`, the two-swap `immunize` solve, `irr`, and `Block` (a portfolio of policies with backing assets by strategic asset allocation) |
+| `alm.option` | Black-Scholes-Merton calls and puts, Greeks, implied volatility, and the FIA crediting call spread |
+| `alm.read` | Treasury rates and rating-bucket credit spreads from FRED; the SOA mortality tables |
+| `alm.examples` | The sample insurer used by the deck and this README |
+
+Every number printed in the deck, the docs and this README is computed by that code; the test
+suite (`uv run pytest`, about 330 tests) checks the formulas against textbook values.
+
+## Quick start
+
+Prerequisites: Python 3.12+ and [uv](https://docs.astral.sh/uv/getting-started/installation/).
 
 ```bash
 git clone https://github.com/realslimslaney/ALM.git
 cd ALM
 uv sync
 uv run pytest
+uv run python scripts/run_alm_demonstration.py   # four blocks of business, offline, about a second
 ```
 
-> New to development? See the [Environment Setup](docs/how-to/environment-setup.md) guide for step-by-step instructions.
+Rendering the deck needs [Quarto](https://quarto.org/docs/get-started/):
+`uv run quarto render quarto/ua_presentation.qmd --to html`. No API key is needed; the credit
+spread table is a committed snapshot that only `just refresh-spreads` (with a free FRED key)
+rewrites. New to the tooling? See [Environment Setup](docs/how-to/environment-setup.md).
 
-## Documentation
+## Simplifying assumptions
 
-- [Environment Setup](docs/how-to/environment-setup.md) — install VS Code, Git, Python, uv, and Quarto from scratch
-- [Getting Started](docs/how-to/getting-started.md) — clone the repo, install dependencies, and verify
-- [Running Scripts](docs/how-to/running-scripts.md) — execute scripts with `uv run`
-- [Creating Quarto Reports](docs/how-to/creating-quarto-reports.md) — author and render `.qmd` reports
-- [Project Structure](docs/reference/project-structure.md) — repository layout and conventions
+This is a teaching model, not a pricing or valuation system. It leaves out, deliberately:
 
-## Simplifying Assumptions
-
-This toolkit is built for learning, not production. Several real-world complexities are intentionally omitted:
-
-- **No expenses.** Policy pricing does not include acquisition costs, administrative expenses, or commissions, nor are any assets reserved to cover them.
-- **No defaults.** Bond and private credit default rates are assumed to be 0%. Realistic default modeling could produce negative asset returns that break small-sample examples.
-- **No liquidity management.** If liability claims come due before asset cash flows mature, the model does not sell assets early, borrow, or rebalance. A real insurer would fail regulatory liquidity standards under this approach.
-- **Flat yield curve.** A single `discount_rate` is used for all maturities. Real ALM uses a full term structure of interest rates.
-- **No lapses or surrenders.** Policyholders are assumed to hold policies to maturity or death. In practice, lapse rates materially affect liability cash flows and reserve requirements.
-- **No reinvestment.** Matured asset proceeds are not reinvested; each block is a run-off projection of the assets bought at issue.
-- **Deterministic mortality.** Mortality follows the table exactly with no stochastic variation. Real portfolios experience mortality volatility, especially in small blocks.
-- **No regulatory capital.** The model does not compute or reserve for statutory or risk-based capital requirements (e.g., C-1 through C-4 risks).
-- **Single-premium-equivalent blocks.** A block is funded with a loaded net single premium, `PV(expected benefits) * (1 + premium_loading)`; level premiums for whole life and term are not projected. Real pricing accounts for expenses, profit targets, lapses, and regulatory reserves.
-- **No taxes.** Investment income and underwriting gain are not reduced by federal or state taxes.
+- **Expenses, taxes and regulatory capital.** No acquisition or maintenance expenses, no tax, no
+  statutory or risk-based capital.
+- **Defaults.** Bond, loan and private-credit default rates are zero, so every yield quoted is a
+  promised yield, not an expected return.
+- **A yield curve.** A single flat Treasury rate discounts everything; spreads are added to it by
+  rating and maturity. There is no term structure, no key-rate risk, and no spread risk.
+- **Compounding conventions differ by instrument.** Bonds and swaps are semi-annual, policies are
+  monthly, the FIA is annual, all quoted as nominal annual rates.
+- **Lapses, surrenders and liquidity.** Policies run to death or maturity; assets are held to
+  maturity with no sales, borrowing or rebalancing, and matured proceeds are not reinvested.
+- **Mortality.** The SOA 2012 IAM Basic table (an annuitant table) is used for every product,
+  with no mortality improvement and no stochastic variation.
+- **Single-premium blocks.** A block of business is funded with a loaded net single premium,
+  `PV(expected benefits) * (1 + premium_loading)`; level premiums are not projected.
+- **Prepayment.** Mortgages are level-payment whole loans with no prepayment option, so they have
+  positive convexity (agency MBS would not).
+- **The indexed annuity is valued on one index path** and held fixed when rates move; its
+  embedded call spread is priced in `alm.option` but not yet used in the deck's hedge.
+- **Accrued interest and day counts** are ignored; valuation is at issue only.
 
 ## Development
 
 ```bash
-uv run pre-commit install  # install git hooks (once)
-uv run ruff check .        # lint
-uv run ruff format .       # format
-uv run pytest              # test
+just check          # ruff lint, ruff format check, pytest
+just render         # render the reports in quarto/
+just docs-serve     # serve the MkDocs site locally
+just refresh-spreads   # rewrite assumptions/credit_spreads.csv from FRED (needs FRED_API_KEY)
 ```
+
+`AGENTS.md` and `.claude/CLAUDE.md` describe the conventions for AI coding assistants used in
+this repo, including the commit gate and the finance rules the code follows. Contributions are
+welcome; see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
