@@ -1,6 +1,7 @@
 """Insurance liability models for ALM."""
 
 import logging
+import math
 from dataclasses import dataclass
 
 import polars as pl
@@ -464,6 +465,45 @@ class Term:
             ncf / (1 + r) ** t for t, ncf in zip(cf["period"], cf["net_cashflow"], strict=True)
         )
 
+    @classmethod
+    def from_face(
+        cls,
+        face_value: float,
+        term: int,
+        qx: list[float],
+        discount_rate: float,
+        frequency: int = 12,
+        age: int | None = None,
+    ) -> "Term":
+        """Create a Term policy with the net level premium (equivalence principle).
+
+        Solves for the annual premium P such that PV(premiums) = PV(benefits)
+        over the policy term at *discount_rate* (nominal annual, compounded
+        *frequency* times).  Survivors at the end of the term receive nothing.
+        """
+        r = discount_rate / frequency
+        n_periods = term * frequency
+
+        pv_benefits = 0.0
+        pv_annuity = 0.0
+        for t in range(1, n_periods + 1):
+            yr_start = (t - 1) / frequency
+            yr_end = t / frequency
+            sp_start = _survival_prob(qx, yr_start)
+            sp_end = _survival_prob(qx, yr_end)
+            v_t = (1 + r) ** (-t)
+            pv_benefits += face_value * (sp_start - sp_end) * v_t
+            pv_annuity += (sp_start / frequency) * v_t
+
+        return cls(
+            face_value=face_value,
+            annual_premium=pv_benefits / pv_annuity,
+            term=term,
+            qx=qx,
+            frequency=frequency,
+            age=age,
+        )
+
 
 # ---------------------------------------------------------------------------
 # FIA – Fixed Indexed Annuity
@@ -646,3 +686,73 @@ class FIA:
             for yr, ncf in zip(cf["year"], cf["net_cashflow"], strict=True)
         )
         return conv / pv
+
+    # ---- embedded option -------------------------------------------------
+
+    def option_cost(self, r: float, sigma: float, q: float = 0.0) -> float:
+        """PV cost per $1 of account value of one year's crediting (a call spread).
+
+        See :func:`alm.option.call_spread_cost`.  *r* is continuously
+        compounded (``math.log(1 + i)`` for an annual effective rate *i*),
+        *sigma* is the annualised index volatility, *q* its dividend yield.
+        """
+        from alm.option import call_spread_cost
+
+        return call_spread_cost(self.participation_rate, self.cap, self.floor, r, sigma, q)
+
+    @staticmethod
+    def option_budget(earned_yield: float, target_spread: float, r: float) -> float:
+        """Option budget per $1 of account value for one year.
+
+        The insurer invests the premium in its general account, keeps a target
+        spread, and spends the rest of the year's investment income on the
+        index options that fund the credited rate:
+
+        ``budget = (earned_yield - target_spread) * exp(-r)``
+
+        (income earned over the year, discounted to the start of the year).
+        """
+        if target_spread > earned_yield:
+            raise ValueError("target_spread cannot exceed earned_yield")
+        return (earned_yield - target_spread) * math.exp(-r)
+
+    def with_cap_for_budget(self, budget: float, r: float, sigma: float, q: float = 0.0) -> "FIA":
+        """Return a copy whose cap makes the annual option cost equal to *budget*."""
+        from alm.option import solve_cap
+
+        cap = solve_cap(budget, self.participation_rate, self.floor, r, sigma, q)
+        return FIA(
+            premium=self.premium,
+            term=self.term,
+            qx=self.qx,
+            floor=self.floor,
+            cap=cap,
+            participation_rate=self.participation_rate,
+            age=self.age,
+        )
+
+    def risk_neutral_value(self, r: float, sigma: float, q: float = 0.0) -> float:
+        """Fair value of the contract: risk-neutral expected benefits discounted at *r*.
+
+        Each year the credited rate is a call spread whose PV is
+        :meth:`option_cost`, so under the risk-neutral measure the account
+        value grows by ``1 + option_cost * exp(r)`` per year in expectation.
+        Death and maturity benefits use the deterministic mortality in ``qx``.
+
+        When the option cost equals ``1 - exp(-r)`` (the insurer spends all
+        of a risk-free return on options) the value equals the premium; a
+        smaller budget leaves the difference as the insurer's expected margin.
+        The result does not depend on any index path, unlike
+        :meth:`present_value`.
+        """
+        growth = 1.0 + self.option_cost(r, sigma, q) * math.exp(r)
+        pv = 0.0
+        for yr in range(1, self.term + 1):
+            av = self.premium * growth**yr
+            sp_start = _survival_prob(self.qx, yr - 1)
+            sp_end = _survival_prob(self.qx, yr)
+            cashflow = av * (sp_start - sp_end)
+            if yr == self.term:
+                cashflow += av * sp_end
+            pv += cashflow * math.exp(-r * yr)
+        return pv

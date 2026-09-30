@@ -170,6 +170,10 @@ for name, cf_table in block_cf_tables.items():
         logger.info("\n%s", display)
 
 # ── Summary Table ─────────────────────────────────────────────────
-summary = pl.DataFrame(summary_rows)
-logger.info("Summary")
-logger.info("\n%s", summary)
+summary = pl.DataFrame(summary_rows).with_columns(
+    pl.col("premium", "pv_liab", "pv_asset", "pv_surplus").round(0).cast(pl.Int64),
+    pl.col("pv_surplus_pct", "asset_irr").round(4),
+)
+logger.info("Summary (PVs at the block rate; pv_surplus_pct = pv_asset / pv_liab - 1)")
+with pl.Config(tbl_width_chars=160, thousands_separator=",", set_fmt_float="full"):
+    logger.info("\n%s", summary)

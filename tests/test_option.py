@@ -8,7 +8,16 @@ import math
 
 import pytest
 
-from alm.option import CallOption, PutOption, bs_call, bs_greeks, bs_put, implied_vol
+from alm.option import (
+    CallOption,
+    PutOption,
+    bs_call,
+    bs_greeks,
+    bs_put,
+    call_spread_cost,
+    implied_vol,
+    solve_cap,
+)
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -324,3 +333,85 @@ class TestPutOption:
         lhs = call.price() - put.price()
         rhs = p["S"] * math.exp(0) - p["K"] * math.exp(-p["r"] * p["T"])
         assert lhs == pytest.approx(rhs, rel=1e-6)
+
+
+# ---------------------------------------------------------------------------
+# Input validation
+# ---------------------------------------------------------------------------
+
+
+class TestInputValidation:
+    @pytest.mark.parametrize(
+        ("S", "K", "T", "sigma", "match"),
+        [
+            (0.0, 100, 1.0, 0.2, "positive"),
+            (100, -1.0, 1.0, 0.2, "positive"),
+            (100, 100, -0.5, 0.2, "non-negative"),
+            (100, 100, 1.0, 0.0, "volatility"),
+        ],
+    )
+    def test_bad_inputs_raise(self, S, K, T, sigma, match):
+        with pytest.raises(ValueError, match=match):
+            bs_call(S, K, T, 0.05, sigma)
+        with pytest.raises(ValueError, match=match):
+            bs_put(S, K, T, 0.05, sigma)
+        with pytest.raises(ValueError, match=match):
+            bs_greeks(S, K, T, 0.05, sigma)
+
+
+# ---------------------------------------------------------------------------
+# FIA call spread
+# ---------------------------------------------------------------------------
+
+R_CONT = math.log(1.04)
+
+
+class TestCallSpreadCost:
+    def test_floor_only_when_cap_equals_floor(self):
+        """With cap == floor the crediting is a fixed rate: PV of the floor and nothing else."""
+        cost = call_spread_cost(1.0, 0.02, 0.02, R_CONT, 0.18)
+        assert cost == pytest.approx(0.02 * math.exp(-R_CONT))
+
+    def test_uncapped_full_participation_is_atm_call(self):
+        """Floor 0, huge cap, participation 1: the credit is an ATM call on a unit index."""
+        cost = call_spread_cost(1.0, 10.0, 0.0, R_CONT, 0.18)
+        assert cost == pytest.approx(bs_call(1.0, 1.0, 1.0, R_CONT, 0.18), rel=1e-6)
+
+    def test_cost_rises_with_cap(self):
+        costs = [call_spread_cost(1.0, cap, 0.0, R_CONT, 0.18) for cap in (0.04, 0.06, 0.08, 0.10)]
+        assert costs == sorted(costs) and costs[0] < costs[-1]
+
+    def test_cost_rises_with_participation(self):
+        assert call_spread_cost(1.0, 0.06, 0.0, R_CONT, 0.18) > call_spread_cost(
+            0.8, 0.06, 0.0, R_CONT, 0.18
+        )
+
+    def test_dividends_reduce_cost(self):
+        assert call_spread_cost(1.0, 0.06, 0.0, R_CONT, 0.18, q=0.02) < call_spread_cost(
+            1.0, 0.06, 0.0, R_CONT, 0.18
+        )
+
+    def test_typical_budget_magnitude(self):
+        """A 6 % cap with 18 % vol costs a few percent of the account, the usual FIA budget."""
+        cost = call_spread_cost(1.0, 0.06, 0.0, R_CONT, 0.18)
+        assert 0.02 < cost < 0.05
+
+    def test_invalid_design_raises(self):
+        with pytest.raises(ValueError, match="cap"):
+            call_spread_cost(1.0, 0.01, 0.02, R_CONT, 0.18)
+        with pytest.raises(ValueError, match="participation"):
+            call_spread_cost(0.0, 0.06, 0.0, R_CONT, 0.18)
+
+
+class TestSolveCap:
+    def test_round_trip(self):
+        budget = 0.03
+        cap = solve_cap(budget, 1.0, 0.0, R_CONT, 0.18)
+        assert call_spread_cost(1.0, cap, 0.0, R_CONT, 0.18) == pytest.approx(budget, abs=1e-8)
+
+    def test_bigger_budget_buys_higher_cap(self):
+        assert solve_cap(0.035, 1.0, 0.0, R_CONT, 0.18) > solve_cap(0.025, 1.0, 0.0, R_CONT, 0.18)
+
+    def test_budget_below_floor_cost_raises(self):
+        with pytest.raises(ValueError, match="floor"):
+            solve_cap(0.001, 1.0, 0.02, R_CONT, 0.18)

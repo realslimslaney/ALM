@@ -394,3 +394,78 @@ fig.show()
 ```
 
 FIAs have relatively short durations (bounded by the accumulation term) compared to whole life or SPIA products. The maturity benefit concentrated in the final year pulls duration toward the term endpoint. These sensitivities hold the credited account value fixed; a full valuation would price the annual call spread the crediting formula embeds.
+
+---
+
+# The Embedded Option: Budget and Cap
+
+Each year's crediting, `max(floor, min(cap, participation x R))`, is a guaranteed floor plus a
+**bull call spread** on the index: long a call struck at the floor, short a call struck at the
+cap. The insurer funds that spread from the investment income the premium earns in its general
+account and keeps a target spread for itself, so the option budget determines the cap. This is
+the "option budget" that FIA pricing actuaries manage, and the reason the deck keeps the FIA out
+of the swap hedge: its equity-option exposure is hedged with index options, not swaps.
+
+```{python}
+#| label: fia-option-cost
+import math
+from alm.option import call_spread_cost
+
+R_CONT = math.log(1 + DISCOUNT_RATE)  # continuously compounded rate for the option formulas
+SIGMA = 0.18  # annualised index volatility
+DIV_YIELD = 0.015  # index dividend yield; the FIA credits price return only
+
+cost_rows = [
+    {
+        "cap": cap,
+        "cost_per_dollar": call_spread_cost(
+            fia.participation_rate, cap, fia.floor, R_CONT, SIGMA, DIV_YIELD
+        ),
+    }
+    for cap in [0.04, 0.05, 0.06, 0.07, 0.08, 0.10]
+]
+styled_gt(
+    pl.DataFrame(cost_rows),
+    "Annual option cost per $1 of account value (participation 100%, floor 0%)",
+).fmt_percent(["cap", "cost_per_dollar"], decimals=2)
+```
+
+```{python}
+#| label: fia-cap-from-budget
+EARNED_YIELD = 0.055  # general-account yield on the premium
+TARGET_SPREAD = 0.015  # what the insurer keeps
+
+budget = FIA.option_budget(EARNED_YIELD, TARGET_SPREAD, R_CONT)
+designed = fia.with_cap_for_budget(budget, R_CONT, SIGMA, DIV_YIELD)
+fair_value = designed.risk_neutral_value(R_CONT, SIGMA, DIV_YIELD)
+full_budget = 1 - math.exp(-R_CONT)
+break_even = fia.with_cap_for_budget(full_budget, R_CONT, SIGMA, DIV_YIELD)
+
+design = pl.DataFrame({
+    "metric": [
+        "Option budget per $1 of account value",
+        "Cap the budget affords",
+        "Fair (risk-neutral) value of the contract",
+        "Premium",
+        "Cap if the whole 4% risk-free return were spent on options",
+    ],
+    "value": [
+        f"{budget:.2%}",
+        f"{designed.cap:.2%}",
+        f"${fair_value:,.0f}",
+        f"${fia.premium:,.0f}",
+        f"{break_even.cap:.2%}",
+    ],
+})
+styled_gt(design, "Designing the cap from the option budget")
+```
+
+With a `{python} f"{EARNED_YIELD:.1%}"` earned yield and a `{python} f"{TARGET_SPREAD:.1%}"`
+target spread, the budget is `{python} f"{budget:.2%}"` of the account each year and buys a cap
+of about `{python} f"{designed.cap:.1%}"`. The contract's fair value,
+`{python} f"${fair_value:,.0f}"` on a `{python} f"${fia.premium:,.0f}"` premium, is below the
+premium by the present value of the spread the insurer keeps; if the entire risk-free return
+were spent on options the cap would rise to `{python} f"{break_even.cap:.1%}"` and the value
+would equal the premium. Unlike the single-path present value above, this value does not
+depend on any assumed index path: each year's credit is worth its option cost under the
+risk-neutral measure, whatever the index does.
