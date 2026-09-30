@@ -28,25 +28,15 @@ format:
 ```{python}
 # | label: setup
 # | echo: false
-import sys
-from pathlib import Path
-
 import polars as pl
-import plotly.io as pio
-import os
 
-sys.path.insert(0, str((Path.cwd().parent.parent) / "src"))
 from alm.liability import SPIA, qx_from_table
 from alm.read import get_2012_iam_table
 from alm import plot
 
 from great_tables import GT, style, loc
 
-pdf_bool = os.environ.get("QUARTO_PROJECT_OUTPUT_FORMAT") == "pdf"
-if pdf_bool:
-    pio.renderers.default = "png"
-else:
-    pio.renderers.default = "notebook"
+plot.use_quarto_renderer()  # plotly.js once per page, no MathJax, png for PDF
 
 BRAND = "#2563eb"
 DISCOUNT_RATE = 0.04
@@ -98,9 +88,9 @@ SPIAs are the bread-and-butter liability for retirement income. They expose the 
 
 # Formulas
 
-## Actuarially Fair Premium
+## Net Single Premium (PV of expected payouts, no loading)
 
-The fair single premium equals the present value of all expected future payouts:
+The net single premium equals the present value of all expected future payouts, with no expense or profit loading:
 
 $$
 \text{Premium} = \sum_{t=1}^{n} \frac{E[\text{Payout}_t]}{(1 + r/f)^t}
@@ -146,7 +136,7 @@ $$
 #| label: spia-example
 qx = qx_from_table(mortality, age=65, sex="female")
 
-# Create a SPIA with actuarially fair premium
+# Create a SPIA priced at its net single premium (no loading)
 spia = SPIA.from_payout(
     annual_payout=120_000,  # $10k/month
     qx=qx,
@@ -156,7 +146,7 @@ spia = SPIA.from_payout(
 )
 
 summary = pl.DataFrame({
-    "metric": ["Annual Payout", "Fair Premium", "Certain Period", "Age", "Frequency"],
+    "metric": ["Annual Payout", "Net Single Premium", "Certain Period", "Age", "Frequency"],
     "value": [
         f"${spia.annual_payout:,.0f}",
         f"${spia.premium:,.0f}",
