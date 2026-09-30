@@ -70,14 +70,10 @@ just test         # run tests
 just lint         # lint with ruff
 just format       # format with ruff
 just render       # render all QMD files to HTML
-just render-pdf   # render all QMD files to PDF
 just render-one convexity-hedging      # render a single report to HTML
-just render-one-pdf convexity-hedging  # render a single report to PDF
 just run run_alm_demonstration         # run a script
+just refresh-spreads                   # refresh credit spreads from FRED (needs FRED_API_KEY)
 ```
-
-> **PDF output** requires a LaTeX distribution. Install TinyTeX via Quarto:
-> `quarto install tinytex`
 
 ## Project Layout
 

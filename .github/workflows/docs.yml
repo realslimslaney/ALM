@@ -22,10 +22,10 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v7
 
       - name: Set up Python
         run: uv python install 3.12
@@ -43,7 +43,9 @@ jobs:
           done
 
       - name: Render Quarto reports
-        run: uv run quarto render quarto/ua_presentation.qmd --to html
+        run: |
+          uv run quarto render quarto/ua_presentation.qmd --to html
+          uv run quarto render quarto/convexity-hedging.qmd --to html
 
       - name: Build docs
         run: uv run mkdocs build --strict
@@ -51,10 +53,10 @@ jobs:
       - name: Copy Quarto reports to site
         run: |
           mkdir -p site/quarto
-          cp quarto/*.html site/quarto/
+          cp quarto/ua_presentation.html quarto/convexity-hedging.html site/quarto/
 
       - name: Upload artifact
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v4
         with:
           path: site/
 
@@ -67,4 +69,4 @@ jobs:
     steps:
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5

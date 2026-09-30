@@ -6,15 +6,7 @@ import pytest
 from alm.core import Block, default_saa, spia_saa
 from alm.liability import FIA, SPIA, Term
 
-
-def _make_mortality(min_age: int = 30, max_age: int = 120) -> pl.DataFrame:
-    """Build a simple synthetic mortality table for testing."""
-    rows = []
-    for age in range(min_age, max_age + 1):
-        for sex in ["male", "female"]:
-            qx = min(0.001 * 1.05 ** (age - min_age), 1.0)
-            rows.append({"age": age, "sex": sex, "qx": qx})
-    return pl.DataFrame(rows)
+from .conftest import make_mortality as _make_mortality
 
 
 class TestBlock:

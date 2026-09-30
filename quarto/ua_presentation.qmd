@@ -37,7 +37,7 @@ from great_tables import GT, style, loc
 sys.path.insert(0, str((Path.cwd().parent) / "src"))
 from alm.asset import Bond, PrivateCredit
 from alm.liability import SPIA, Term, WL, FIA, qx_from_table
-from alm.read import get_2012_iam_table, update_credit_spreads
+from alm.read import get_2012_iam_table
 from alm.core import (
     Block,
     InterestRateSwap,
@@ -54,12 +54,9 @@ from alm import plot
 logger = logging.getLogger(__name__)
 
 pdf_bool = os.environ.get("QUARTO_PROJECT_OUTPUT_FORMAT") == "pdf"
-if pdf_bool:
-    pio.renderers.default = "png"
-else:
-    pio.renderers.default = "notebook_connected+vscode"
-
-update_credit_spreads()
+# plotly_mimetype+notebook embeds plotly.js once per document (notebook_connected+vscode
+# embedded it once per figure and produced an 82 MB file)
+pio.renderers.default = "png" if pdf_bool else "plotly_mimetype+notebook"
 
 DISCOUNT_RATE = 0.04
 

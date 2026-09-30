@@ -27,6 +27,9 @@ theme:
 
 nav:
   - Home: index.md
+  - Presentation:
+      - ALM deck (start here): https://realslimslaney.github.io/ALM/quarto/ua_presentation.html
+      - Convexity hedging appendix: https://realslimslaney.github.io/ALM/quarto/convexity-hedging.html
   - How-to Guides:
       - Environment Setup: how-to/environment-setup.md
       - Getting Started: how-to/getting-started.md

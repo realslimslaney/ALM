@@ -55,17 +55,15 @@ docs-build: render-refs
 render: render-refs
     uv run quarto render quarto/ --to html
 
-# Render all QMD files to PDF (requires TinyTeX: quarto install tinytex)
-render-pdf:
-    uv run quarto render quarto/ --to pdf
-
 # Render a single QMD file to HTML: just render-one convexity-hedging
 render-one name:
     uv run quarto render quarto/{{name}}.qmd --to html
 
-# Render a single QMD file to PDF: just render-one-pdf convexity-hedging
-render-one-pdf name:
-    uv run quarto render quarto/{{name}}.qmd --to pdf
+# --- Data ---
+
+# Refresh assumptions/credit_spreads.csv from FRED (needs FRED_API_KEY); the only writer of that file
+refresh-spreads:
+    uv run python scripts/refresh_spreads.py
 
 # --- Scripts ---
 
