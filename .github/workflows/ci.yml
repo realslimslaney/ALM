@@ -54,3 +54,15 @@ jobs:
         with:
           files: coverage.xml
           fail_ci_if_error: false
+
+  secret-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Secret scanning with TruffleHog
+        uses: trufflesecurity/trufflehog@v3.88.26
+        with:
+          extra_args: --only-verified

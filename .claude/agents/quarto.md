@@ -1,78 +1,73 @@
+---
+name: quarto
+description: Create or edit Quarto reports (.qmd) in quarto/ and the executable reference pages in docs/reference/ref-*.qmd, following this repo's rendering conventions (polars, great_tables, plotly with a single embedded plotly.js, no FRED refresh during render). Use for any report or deck change and for checking that a page renders offline.
+tools: Read, Grep, Glob, Bash
+---
+
 # Quarto Agent
 
-Create and edit Quarto reports (`.qmd` files) in the `quarto/` directory, following the project's established conventions.
+Create and edit Quarto reports (`.qmd` files), following the project's conventions.
 
-## Project Quarto Setup
+## Project Quarto setup
 
-- All `.qmd` files live in `quarto/`
-- Shared config is in `quarto/_quarto.yaml` — individual reports can override settings in their YAML front matter
-- The Python executable is the local `.venv`: `execute.python: ".venv/Scripts/python.exe"`
-- Global defaults: `echo: false`, `warning: false`, `code-fold: true`, `embed-resources: true`
+- Reports live in `quarto/`: `ua_presentation.qmd` is the flagship deck and
+  `convexity-hedging.qmd` is the technical appendix. Reference pages that execute code are
+  `docs/reference/ref-*.qmd` and render to gitignored HTML next to them.
+- Shared config is `quarto/_quarto.yaml`; a report overrides settings in its own front
+  matter. Global defaults: `echo: false`, `warning: false`, `code-fold: true`,
+  `embed-resources: true`, `html-math-method: webtex` (math renders as inline SVG, which is
+  the only method that works in a self-contained file).
+- **Rendered output is never committed.** `quarto/*.html` and `quarto/*.pdf` are gitignored;
+  GitHub Pages builds the deck in `.github/workflows/docs.yml`.
+- **Never call `update_credit_spreads()` or any FRED fetch inside a render.** Reports read
+  the committed `assumptions/credit_spreads.csv`; `just refresh-spreads` is the only writer.
+  A render must succeed offline with no `FRED_API_KEY`.
 
-## YAML Front Matter
+## Front matter
 
-Every `.qmd` report should include at minimum:
+Every report includes at minimum:
 
 ```yaml
 ---
-title: "<Report Title>"
+title: "<Descriptive Title>"
 format:
   html:
     toc: true
     number-sections: true
-    self-contained: true
-  pdf:
-    toc: true
-    number-sections: true
-    geometry:
-      - left=0.5in
-      - right=0.5in
-      - top=0.5in
-      - bottom=0.5in
-    papersize: letter
-    fontsize: 11pt
 ---
 ```
 
-Only add format keys that **override** `_quarto.yaml` — do not duplicate defaults unnecessarily.
+Only add keys that override `_quarto.yaml`. Give the title a meaning a stranger understands
+("Protecting an Insurer's Surplus from Rate Moves"), never a date code.
 
-## Code Cells
+## Code cells
 
-### Imports cell
-The first code cell should handle imports and environment setup. Follow this pattern:
-
-```{python imports}
-from pathlib import Path
-import sys
-import polars as pl
-
-sys.path.insert(0, str((Path.cwd().parent) / "src"))
-from alm import ...
-```
-
-- Use `polars`, never `pandas`
-- Import from `src/alm/` using the `sys.path` pattern above
-- Handle PDF vs HTML renderer switching for plotly:
+- Import the package directly (`from alm.asset import Bond`); `uv sync` installs `alm` in
+  editable mode, so no `sys.path` manipulation is needed.
+- Use `polars`, never `pandas`; `great_tables.GT` for tables; `plotly` for charts.
+- Set the plotly renderer once in the setup cell so plotly.js is embedded a single time:
 
 ```python
-import os, plotly.io as pio
-pdf_bool = os.environ.get("QUARTO_PROJECT_OUTPUT_FORMAT") == "pdf"
-pio.renderers.default = "png" if pdf_bool else "notebook_connected+vscode"
+import plotly.io as pio
+
+pio.renderers.default = "plotly_mimetype+notebook"
 ```
 
-### Content cells
-- Use **named code cells** where appropriate: `` ```{python cell-name} ``
-- Keep cells focused — one visualization or one table per cell
-- Use `great_tables.GT` for styled tables and `plotly` for charts
-- Add markdown narrative between cells to explain findings
+  Never use `notebook_connected+vscode` with `embed-resources`; it embeds plotly.js per
+  figure and produced an 82 MB file.
+- Named cells (`#| label: name`), one table or chart per cell, narrative between cells.
+- Every number in the prose comes from a computed variable, not a typed literal, so the
+  text cannot drift from the code.
 
 ## Rendering
 
-- Render HTML: `uv run quarto render quarto/<name>.qmd --to html`
-- Render PDF: `uv run quarto render quarto/<name>.qmd --to pdf`
+- `just render-one ua_presentation` or `uv run quarto render quarto/<name>.qmd --to html`.
+- Reference pages: `just render-refs`.
+- After a render, check `git status`: nothing under `assumptions/` may have changed.
 
-## Before Writing
+## Before writing
 
-1. Read `quarto/_quarto.yaml` to confirm current shared config
-2. Read existing `.qmd` files in `quarto/` to match the established style
-3. Read relevant source modules in `src/alm/` to use the correct imports and function signatures
+1. Read `quarto/_quarto.yaml` and the existing `.qmd` to match style.
+2. Read the modules in `src/alm/` you import, for the current signatures.
+3. Ask the `finance` agent (or read `.claude/agents/finance.md`) before stating a financial
+   claim in prose; the domain rules there are binding.

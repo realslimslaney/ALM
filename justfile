@@ -24,6 +24,14 @@ lint:
 format:
     uv run ruff format .
 
+# Format code (alias used by the sibling repos)
+fmt:
+    uv run ruff format .
+
+# Auto-fix lint errors
+fix:
+    uv run ruff check . --fix
+
 # --- Documentation ---
 
 # Render Quarto reference pages to HTML
@@ -64,3 +72,17 @@ render-one-pdf name:
 # Run a script: just run run_alm_demonstration
 run name:
     uv run python scripts/{{name}}.py
+
+# --- AI tooling ---
+
+# Second-opinion code review by the other AI: usage / start / reply / conclude / post / status / transcript
+cross-review *args:
+    uv run python scripts/cross_review.py {{args}}
+
+# Regenerate the Codex mirrors of every Claude skill (.claude/skills -> .agents/skills)
+codex-skills-sync:
+    uv run python scripts/sync_codex_skills.py
+
+# Exit 1 if a Codex skill mirror is missing, stale, or extra
+codex-skills-check:
+    uv run python scripts/sync_codex_skills.py --check
