@@ -48,17 +48,23 @@ conditions.
 
 | Label | FRED Series ID | Description |
 |---|---|---|
-| IG_OAS | BAMLC0A0CM | ICE BofA US Corporate Investment Grade OAS |
-| HY_OAS | BAMLH0A0HYM2 | ICE BofA US High Yield OAS |
-| BAA10Y | BAA10Y | Moody's Baa Corporate Bond Yield Relative to 10Y Treasury |
-| AAA10Y | AAA10Y | Moody's Aaa Corporate Bond Yield Relative to 10Y Treasury |
+| AAA_OAS | BAMLC0A1CAAA | ICE BofA AAA US Corporate OAS |
+| AA_OAS | BAMLC0A2CAA | ICE BofA AA US Corporate OAS |
+| A_OAS | BAMLC0A3CA | ICE BofA Single-A US Corporate OAS |
+| BBB_OAS | BAMLC0A4CBBB | ICE BofA BBB US Corporate OAS |
+| BB_OAS | BAMLH0A1HYBB | ICE BofA BB US High Yield OAS |
+| B_OAS | BAMLH0A2HYB | ICE BofA Single-B US High Yield OAS |
+| IG_OAS | BAMLC0A0CM | ICE BofA US Corporate Investment Grade OAS (history only) |
+| HY_OAS | BAMLH0A0HYM2 | ICE BofA US High Yield OAS (history only) |
+| BAA10Y | BAA10Y | Moody's Baa Corporate Bond Yield Relative to 10Y Treasury (history only) |
+| AAA10Y | AAA10Y | Moody's Aaa Corporate Bond Yield Relative to 10Y Treasury (history only) |
 
 Spreads are in **percentage points** (e.g. 1.50 means 150 bps).
 
-These four series anchor the 10-year spread for four ratings (AAA, A,
-BBB, BB).  The remaining ratings (AA, B) are derived by interpolation
-and extrapolation.  See `update_credit_spreads()` in `src/alm/read.py`
-for the full algorithm.
+The six rating-bucket OAS series anchor the 10-year point of each
+rating's curve; all six share one methodology, so the table stays
+ordered from AAA to B.  The broad-index and Moody's series are kept for
+history charts only.  See `update_credit_spreads()` in `src/alm/read.py`.
 
 **Code:** `read_credit_spread_indices()`, `update_credit_spreads()` in
 `src/alm/read.py`
@@ -70,8 +76,17 @@ for the full algorithm.
 #### IAM 2012 Basic Tables
 
 The **Individual Annuity Mortality** 2012 Basic table, published by
-the Society of Actuaries.  Used for all life-contingent liability
-calculations (SPIA, WL, Term, FIA).
+the Society of Actuaries (SOA table IDs 2581 male and 2582 female,
+[mort.soa.org](https://mort.soa.org)).  Used for all life-contingent
+liability calculations (SPIA, WL, Term, FIA).
+
+Two simplifications to keep in mind: it is an **annuitant** table, so
+using it for whole life and term understates life-insurance mortality
+(a 2015 VBT or 2017 CSO basis would be standard); and **no mortality
+improvement** is projected beyond 2012 (the SOA pairs this table with
+Projection Scale G2), which understates annuity liabilities for later
+issue years.  The end of the table (age 120) is treated as the limiting
+age: whole life pays any survivors then.
 
 | File | Contents |
 |---|---|
@@ -144,8 +159,8 @@ from market data.
 
 | Parameter | Value | Location |
 |---|---|---|
-| Illiquidity spread | 200 bps (0.020) | `Block.generate_assets()`, `Block.reinvest()` in `src/alm/core.py` |
-| Other spread | 50 bps (0.005) | `Block.generate_assets()`, `Block.reinvest()` in `src/alm/core.py` |
+| Illiquidity spread | 200 bps (0.020) | `Block.generate_assets()` in `src/alm/core.py` |
+| Other spread | 50 bps (0.005) | `Block.generate_assets()` in `src/alm/core.py` |
 
 **Rationale:** Industry estimates for middle-market private credit.
 The illiquidity premium compensates buy-and-hold investors (like
@@ -156,10 +171,9 @@ spread captures complexity and structuring premiums.
 
 | Parameter | Value | Location |
 |---|---|---|
-| Profit margin | 5% | `Block.profit_margin` default in `src/alm/core.py` |
+| Premium loading on the net single premium | 5% | `Block.premium_loading` default in `src/alm/core.py` |
 | SPIA annual payout rate | 6% of premium | `Block.generate_policies()` in `src/alm/core.py` |
-| WL annual premium rate | 1.5% of face value | `Block.generate_policies()` in `src/alm/core.py` |
-| Term annual premium rate | 0.5% of face value | `Block.generate_policies()` in `src/alm/core.py` |
+| WL and Term level premiums | None (single-premium equivalent) | `Block.generate_policies()` in `src/alm/core.py` |
 | Term policy term | 20 years | `Block.generate_policies()` in `src/alm/core.py` |
 | FIA accumulation term | 10 years | `Block.generate_policies()` in `src/alm/core.py` |
 | FIA floor | 0% | `FIA` default in `src/alm/liability.py` |
@@ -167,8 +181,11 @@ spread captures complexity and structuring premiums.
 | FIA participation rate | 100% | `FIA` default in `src/alm/liability.py` |
 
 **Rationale:** Simplified pricing assumptions appropriate for an
-educational demonstration.  Real-world pricing would use experience
-studies, lapse assumptions, and more granular expense loads.
+educational demonstration.  Every block is funded with a loaded net
+single premium and no level premiums are projected, so whole life and
+term blocks behave like single-premium contracts.  Real-world pricing
+would use experience studies, lapse assumptions, and more granular
+expense loads.
 
 ### Mortgage Assumptions
 
@@ -176,11 +193,13 @@ studies, lapse assumptions, and more granular expense loads.
 |---|---|---|
 | Term split | 50% 15-year, 50% 30-year | `Block.generate_assets()` in `src/alm/core.py` |
 | Spread proxy | A-rated credit spread at matching maturity | `Block.generate_assets()` in `src/alm/core.py` |
-| Reinvestment term | 15 years | `Block.reinvest()` in `src/alm/core.py` |
 
-**Rationale:** Simplified mortgage model with no prepayment.  Uses the
-A-rated credit spread as a proxy for the mortgage-Treasury spread,
-which is a rough but reasonable approximation.
+**Rationale:** Level-payment whole loans with no prepayment, so they
+have positive convexity (unlike agency MBS, whose prepayment option
+gives negative convexity).  Uses the A-rated credit spread as a proxy
+for the mortgage-Treasury spread, which is a rough but reasonable
+approximation.  Matured proceeds are not reinvested; each block is a
+run-off projection of the assets bought at issue.
 
 ### Rating Distributions
 
@@ -188,7 +207,7 @@ Hardcoded allocation weights within each asset class.
 
 | Asset class | Distribution | Location |
 |---|---|---|
-| Government bonds | 70% AAA, 30% AA | `GOVT_RATING_DIST` in `src/alm/core.py` |
+| Government bonds | 100% AA+ (US Treasuries; zero credit spread) | `GOVT_RATING_DIST` in `src/alm/core.py` |
 | Corporate bonds | 30% A, 50% BBB, 15% BB, 5% B | `CORP_RATING_DIST` in `src/alm/core.py` |
 | Private credit | 40% BB, 60% B | `PC_RATING_DIST` in `src/alm/core.py` |
 
@@ -199,13 +218,13 @@ Three predefined allocations, all with a 10% private credit cap:
 | SAA | Govt | Corp | Mortgages | PC | Intended for |
 |---|---|---|---|---|---|
 | `default_saa()` | 40% | 30% | 20% | 10% | General purpose |
-| `spia_saa()` | 50% | 30% | 10% | 10% | SPIA (longer duration) |
-| `term_saa()` | 30% | 30% | 30% | 10% | Term (shorter duration) |
+| `spia_saa()` | 30% | 40% | 20% | 10% | Long-duration blocks (SPIA, WL): tilt to spread product |
+| `term_saa()` | 50% | 30% | 10% | 10% | Short-duration blocks (Term): tilt to government bonds |
 
 ### Maturity Profiles by Liability Type
 
-Bond maturities chosen to roughly match the liability's duration
-profile:
+Fixed backing-asset maturity profiles per liability type (a stylized
+horizon match, not a DV01-matched solve):
 
 | Liability type | Bond maturities | PC maturities |
 |---|---|---|
@@ -241,8 +260,8 @@ returns on an equity index used for crediting rate calculations.
 | Data | Source | Refreshable? |
 |---|---|---|
 | Treasury yield curve | FRED (live API) | Yes — `get_treasury_rates(refresh=True)` |
-| Credit spread 10Y anchors | FRED (live API) | Yes — `update_credit_spreads()` |
-| Credit spread term structure | Scaled from FRED anchors | Yes — via `update_credit_spreads()` |
+| Credit spread 10Y anchors | FRED (six ICE BofA rating-bucket OAS series) | Yes — `just refresh-spreads` |
+| Credit spread term structure | Scaled from FRED anchors | Yes — via `just refresh-spreads` |
 | Mortality rates ($q_x$) | SOA IAM 2012 Basic (published) | No — static published table |
 | Illiquidity spread (200 bps) | Industry estimate | No — hardcoded |
 | Other spread (50 bps) | Estimate | No — hardcoded |

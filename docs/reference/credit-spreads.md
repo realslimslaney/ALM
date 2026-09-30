@@ -58,12 +58,12 @@ term structure in `assumptions/credit_spreads.csv` (values in bps):
 
 | Rating | 1Y | 2Y | 3Y | 5Y | 7Y | 10Y | 20Y | 30Y |
 |---|---|---|---|---|---|---|---|---|
-| AAA | 23 | 35 | 46 | 70 | 93 | 116 | 139 | 151 |
-| AA | 22 | 32 | 42 | 63 | 82 | 100 | 120 | 131 |
-| A | 18 | 27 | 36 | 52 | 64 | 76 | 91 | 97 |
-| BBB | 48 | 68 | 87 | 119 | 143 | 167 | 207 | 223 |
-| BB | 106 | 141 | 177 | 226 | 262 | 297 | 354 | 375 |
-| B | 212 | 264 | 312 | 374 | 418 | 460 | 531 | 552 |
+| AAA | 8 | 13 | 17 | 25 | 34 | 42 | 50 | 55 |
+| AA | 14 | 20 | 26 | 38 | 50 | 61 | 73 | 80 |
+| A | 17 | 25 | 34 | 49 | 60 | 71 | 85 | 91 |
+| BBB | 29 | 42 | 53 | 73 | 87 | 102 | 127 | 136 |
+| BB | 65 | 87 | 109 | 139 | 161 | 183 | 218 | 231 |
+| B | 142 | 178 | 209 | 251 | 280 | 309 | 356 | 370 |
 
 When a bond's maturity falls between table tenors, `get_spread()`
 linearly interpolates.
@@ -74,26 +74,34 @@ linearly interpolates.
 
 ## Updating Spreads from Market Data
 
-The spread table can be refreshed from four FRED series that anchor
-the 10-year point for specific ratings:
+The spread table is refreshed with `just refresh-spreads` from six FRED
+series, one per rating, that anchor the 10-year point of each curve:
 
 | Rating | FRED anchor | Series ID | Description |
 |---|---|---|---|
-| AAA | AAA10Y | AAA10Y | Moody's Aaa yield − 10Y Treasury |
-| A | IG_OAS | BAMLC0A0CM | ICE BofA US Corporate IG OAS |
-| BBB | BAA10Y | BAA10Y | Moody's Baa yield − 10Y Treasury |
-| BB | HY_OAS | BAMLH0A0HYM2 | ICE BofA US High Yield OAS |
+| AAA | AAA_OAS | BAMLC0A1CAAA | ICE BofA AAA US Corporate OAS |
+| AA | AA_OAS | BAMLC0A2CAA | ICE BofA AA US Corporate OAS |
+| A | A_OAS | BAMLC0A3CA | ICE BofA Single-A US Corporate OAS |
+| BBB | BBB_OAS | BAMLC0A4CBBB | ICE BofA BBB US Corporate OAS |
+| BB | BB_OAS | BAMLH0A1HYBB | ICE BofA BB US High Yield OAS |
+| B | B_OAS | BAMLH0A2HYB | ICE BofA Single-B US High Yield OAS |
 
 The update algorithm:
 
-1. Fetch the latest 10Y anchor spread for AAA, A, BBB, BB from FRED
-2. Compute a scale factor for each: `new_10Y / old_10Y`
-3. Multiply the entire tenor curve for that rating by the scale factor
-4. **AA** is interpolated between AAA and A, preserving its original
-   relative position between the two
-5. **B** is extrapolated from BB, preserving the original BB-to-B ratio
-   at each tenor
-6. Round to whole basis points and write back to CSV
+1. Fetch the latest value of each rating's OAS series from FRED
+2. Compute a scale factor for each rating: `new_10Y / old_10Y`
+3. Multiply the entire tenor curve for that rating by the scale factor,
+   which preserves the stylized term-structure shape
+4. Round to whole basis points and write back to CSV
+
+All six anchors come from one index family with one methodology, so the
+table is ordered (AAA narrowest, B widest) at every tenor. An earlier
+version mixed Moody's yield-minus-Treasury series (which include term
+premium) with ICE OAS indices and produced an inverted table; the update
+now logs a warning if the market data ever breaks the ordering.
+
+Reports and scripts never call the refresh: they read the committed CSV,
+so a render is reproducible and needs no FRED key.
 
 **Code:** `update_credit_spreads()` in `src/alm/read.py`
 
@@ -109,15 +117,15 @@ return characteristics:
 | Attribute | Detail |
 |---|---|
 | Issuer | U.S. government (sovereign) |
-| Credit risk | Effectively zero (AAA / AA rated) |
+| Credit risk | Effectively zero; rated AA+ (S&P, Fitch) and Aa1 (Moody's) since May 2025 |
 | Liquidity | Highest — deep, transparent markets |
-| Spread over risk-free | Minimal (the Treasury *is* the risk-free benchmark) |
-| Typical ratings in toolkit | 70% AAA, 30% AA |
-| Role in portfolio | Duration anchor, safe-haven allocation |
+| Spread over risk-free | Zero (the Treasury *is* the risk-free benchmark) |
+| Rating label in toolkit | AA+ |
+| Role in portfolio | Duration anchor, liquidity, safe-haven allocation |
 
-Treasuries define the risk-free yield curve.  In this toolkit, the
-"discount rate" generally represents a Treasury-level rate, and all
-other instruments earn a spread above it.
+Treasuries define the risk-free yield curve.  In this toolkit the
+"discount rate" is a Treasury-level rate; government bonds earn exactly
+that rate and all other instruments earn a spread above it.
 
 ### Corporate Bonds
 
@@ -146,7 +154,7 @@ relatively contained.
 | Spread over risk-free | Wide: credit spread + illiquidity premium + other |
 | Typical ratings in toolkit | 40% BB, 60% B |
 | Role in portfolio | Yield pickup, illiquidity premium capture |
-| Regulatory cap | 10% of portfolio (SAA constraint) |
+| Allocation cap | 10% of portfolio (a stylized SAA constraint in this toolkit, not a regulation) |
 
 Private credit earns the widest total yield because it compensates for
 *both* credit risk and illiquidity.  The toolkit decomposes the total
@@ -163,10 +171,12 @@ $$
 | Illiquidity spread | 200 bps (hardcoded) | Industry estimate |
 | Other spread | 50 bps (hardcoded) | Catch-all (complexity, structuring) |
 
-**Valuation note:** The `PrivateCredit` class discounts at the
-risk-free rate by default (not the total yield).  This means the PV
-exceeds par — the excess represents the economic value of the
-illiquidity premium to a buy-and-hold investor like an insurer.
+**Valuation note:** The `PrivateCredit` class values the loan at its
+own total yield by default, so it is worth par at issue.  The spread
+over Treasuries is *expected excess income* to a buy-and-hold investor
+(before default losses, which this toolkit ignores), not a day-one
+gain; discounting the promised coupons at the risk-free rate would
+inflate the asset by the full spread and overstate surplus.
 
 **Code:** `PrivateCredit` in `src/alm/asset.py`, `PC_RATING_DIST` in `src/alm/core.py`
 
@@ -176,10 +186,10 @@ illiquidity premium to a buy-and-hold investor like an insurer.
 
 | | Treasury | Corporate | Private Credit |
 |---|---|---|---|
-| **Credit quality** | AAA / AA | A to B | BB / B |
-| **10Y spread (bps)** | ~0 | 76–460 | 297–460 + 250 illiq/other |
+| **Credit quality** | AA+ / Aa1 | A to B | BB / B |
+| **10Y spread (bps)** | 0 | see table above | BB and B spreads + 250 illiq/other |
 | **Liquidity** | Excellent | Good (IG) / Fair (HY) | Poor |
-| **Valuation method** | Discount at yield | Discount at yield | Discount at risk-free rate |
+| **Valuation method** | Discount at own yield | Discount at own yield | Discount at own yield |
 | **Duration behavior** | Standard | Standard | Standard (bullet-like) |
 | **SAA weight (default)** | 40% | 30% | 10% |
 | **Maturities (default)** | 5, 10, 20, 30Y | 5, 10, 20, 30Y | 3, 5Y |
@@ -195,8 +205,7 @@ used when generating block-level portfolios:
 
 | Rating | Weight |
 |---|---|
-| AAA | 70% |
-| AA | 30% |
+| AA+ (US Treasury, zero spread) | 100% |
 
 **Corporate bonds** (`CORP_RATING_DIST`):
 

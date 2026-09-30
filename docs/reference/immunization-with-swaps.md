@@ -13,8 +13,17 @@ assets and liabilities reprice by different amounts because they have
 different duration and convexity profiles.  The surplus
 (Assets − Liabilities) swings unpredictably.
 
-**Goal:**  Make surplus insensitive to parallel shifts in the yield
-curve by closing both the duration gap and the convexity gap.
+**Goal:**  Make surplus insensitive to *parallel* shifts in the yield
+curve by closing both the DV01 gap and the dollar-convexity gap.
+
+**A note on the word "immunization."**  Redington immunization has three
+conditions: equal present values of assets and liabilities, equal
+duration, and asset convexity at or above liability convexity.  What
+this page (and `immunize()`) does is narrower: it matches DV01 and
+dollar convexity with two swaps so that surplus is flat to second
+order for a parallel shift.  It does not enforce the PV condition, and
+it says nothing about curve twists, spread moves, or the FIA's embedded
+option.  Read "immunized" below as "DV01 and convexity matched."
 
 ---
 
@@ -30,7 +39,10 @@ A plain-vanilla fixed-for-floating swap exchanges:
 | **Receive-fixed** (pay floating) | Adds duration | Long a fixed-rate bond, short a floater |
 | **Pay-fixed** (receive floating) | Removes duration | Short a fixed-rate bond, long a floater |
 
-Swaps are off-balance-sheet — they adjust risk without buying or
+Swaps adjust rate risk without buying or selling bonds; the notional is
+never exchanged, though the swap itself is carried on the balance sheet
+at fair value (ASC 815 / IFRS 9, statutory Schedule DB).  Only the
+notional is off-balance-sheet — they adjust risk without buying or
 selling bonds.
 
 **Code:** `InterestRateSwap` in `src/alm/core.py`
@@ -74,8 +86,9 @@ $$
 \Delta C_\$ = C_{\$,\text{liabilities}} - C_{\$,\text{assets}}
 $$
 
-Duration-only hedging leaves the portfolio exposed to large rate moves.
-Closing the convexity gap fixes this.
+Duration-only hedging leaves the portfolio exposed to larger rate
+moves.  Closing the convexity gap removes the second-order error for
+parallel shifts; it does nothing for curve twists or spread changes.
 
 **Code:** `dollar_convexity()` in `src/alm/core.py`
 
@@ -177,11 +190,14 @@ separation in tenor.
 
 After computing the hedge, re-run the portfolio under parallel rate
 shocks (e.g. ±100 bp, ±200 bp) and compare surplus with and without
-the hedge.  A well-immunized portfolio should show:
+the hedge.  A portfolio with DV01 and convexity matched should show:
 
-- Surplus nearly flat across small shocks (duration matched)
-- Surplus slightly *gaining* under large shocks in either direction
-  (positive net convexity)
+- Surplus flat across small shocks (DV01 matched)
+- Surplus still close to flat under large shocks in either direction:
+  the solver sets net dollar convexity to *zero*, so only third-order
+  terms remain.  A hedge that leaves net convexity positive would show
+  surplus gaining in both directions; that is a design choice, not what
+  `immunize()` does.
 
 ---
 

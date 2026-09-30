@@ -71,7 +71,9 @@ mortality = get_2012_iam_table()
 
 # Overview
 
-A **Fixed Indexed Annuity (FIA)** is a single-premium deferred annuity whose account value grows based on an external reference rate (e.g., an Equity index), subject to an annual **floor** and **cap**. The policyholder's principal is protected by the floor (typically 0%), while upside is capped.
+A **Fixed Indexed Annuity (FIA)** is a single-premium deferred annuity whose account value is credited each year with the price return of an equity index (annual point-to-point), scaled by a participation rate and clamped between a **floor** and a **cap**. The floor (typically 0%) is the policyholder's guarantee; the cap is a limit the insurer sets and can usually reset each year.
+
+This page values the contract on one *given* path of index returns with deterministic cash flows. It does not price the embedded call spread, and it ignores surrender charges, market value adjustments and lapses; the account value is held fixed when rates are shocked.
 
 FIAs combine elements of fixed annuities (guaranteed minimum) with equity-linked products (market participation). From an ALM perspective, FIAs create path-dependent liabilities that depend on both mortality and future index returns.
 
@@ -101,10 +103,10 @@ FIAs combine elements of fixed annuities (guaranteed minimum) with equity-linked
 
 ## Credited Rate
 
-Each year, the credited rate is derived from the external index rate:
+Each year, the credited rate is derived from the index's annual price return:
 
 $$
-r_{\text{credited}} = \max\!\Big(\text{floor},\; \min\!\big(\text{cap},\; r_{\text{index}} \times \text{participation}\big)\Big)he 
+r_{\text{credited}} = \max\!\Big(\text{floor},\; \min\!\big(\text{cap},\; r_{\text{index}} \times \text{participation}\big)\Big)
 $$
 
 ## Account Value Accumulation
@@ -161,8 +163,8 @@ fia = FIA(
     age=55,
 )
 
-# Baseline index rates: moderate growth scenario
-index_rates = [0.03, 0.05, -0.02, 0.07, 0.04, 0.06, 0.01, 0.08, -0.01, 0.05]
+# Baseline index returns: moderate growth scenario
+index_returns = [0.03, 0.05, -0.02, 0.07, 0.04, 0.06, 0.01, 0.08, -0.01, 0.05]
 
 summary = pl.DataFrame({
     "metric": [
@@ -187,21 +189,21 @@ styled_gt(summary, "FIA — Example Policy")
 
 ```{python}
 #| label: fia-credited-rates
-# Show how floor/cap transform index rates
+# Show how floor/cap transform index returns
 demo_rates = [r / 100 for r in range(-10, 16)]
 credited = [fia.credited_rate(r) for r in demo_rates]
 
 rate_demo = pl.DataFrame({
-    "index_rate": demo_rates,
+    "index_return": demo_rates,
     "credited_rate": credited,
 })
 
 fig = plot.line_chart(
     rate_demo,
-    x="index_rate",
+    x="index_return",
     y="credited_rate",
-    title="FIA Credited Rate vs Index Rate (Floor=0%, Cap=6%)",
-    xlab="Index Rate",
+    title="FIA Credited Rate vs Index Return (Floor=0%, Cap=6%)",
+    xlab="Index Return",
     ylab="Credited Rate",
     xformat="%",
     yformat="%",
@@ -217,9 +219,9 @@ The credited rate is clamped between the floor and cap. Negative index returns a
 
 ```{python}
 #| label: fia-account-values
-av_df = fia.account_values(index_rates)
+av_df = fia.account_values(index_returns)
 styled_gt(av_df, "Account Value Accumulation").fmt_percent(
-    ["index_rate", "credited_rate"], decimals=1
+    ["index_return", "credited_rate"], decimals=1
 ).fmt_currency("account_value", decimals=0)
 ```
 
@@ -282,7 +284,7 @@ The floor provides downside protection: even in the bear scenario, the account v
 
 ```{python}
 #| label: fia-cashflows
-cf = fia.cashflows(index_rates)
+cf = fia.cashflows(index_returns)
 styled_gt(cf, "Expected Cashflows (Moderate Scenario)").fmt_currency(
     ["account_value", "expected_death_benefit", "expected_maturity_benefit", "net_cashflow"],
     decimals=0,
@@ -319,11 +321,11 @@ for cap_val in [0.04, 0.06, 0.08, 0.10]:
             premium=500_000, term=10, qx=qx,
             floor=0.0, cap=cap_val, participation_rate=pr_val, age=55,
         )
-        pv = f.present_value(index_rates, DISCOUNT_RATE)
+        pv = f.present_value(index_returns, DISCOUNT_RATE)
         param_rows.append({
             "cap": f"{cap_val:.0%}",
             "participation": f"{pr_val:.0%}",
-            "terminal_av": f.account_values(index_rates)["account_value"].to_list()[-1],
+            "terminal_av": f.account_values(index_returns)["account_value"].to_list()[-1],
             "pv_liability": pv,
         })
 
@@ -343,7 +345,7 @@ Higher caps and participation rates increase the terminal account value and thus
 #| label: fia-pv-sensitivity
 rates_range = [r / 1000 for r in range(10, 81)]
 pv_rows = [
-    {"discount_rate": r, "present_value": fia.present_value(index_rates, r)}
+    {"discount_rate": r, "present_value": fia.present_value(index_returns, r)}
     for r in rates_range
 ]
 pv_df = pl.DataFrame(pv_rows)
@@ -368,11 +370,11 @@ fig.show()
 ```{python}
 #| label: fia-risk-metrics
 metrics = pl.DataFrame({
-    "metric": ["Liability PV", "Macaulay Duration", "Convexity"],
+    "metric": ["Liability PV (this path)", "Macaulay Duration", "Convexity"],
     "value": [
-        f"${fia.present_value(index_rates, DISCOUNT_RATE):,.0f}",
-        f"{fia.duration(index_rates, DISCOUNT_RATE):.2f} years",
-        f"{fia.convexity(index_rates, DISCOUNT_RATE):.2f}",
+        f"${fia.present_value(index_returns, DISCOUNT_RATE):,.0f}",
+        f"{fia.duration(index_returns, DISCOUNT_RATE):.2f} years",
+        f"{fia.convexity(index_returns, DISCOUNT_RATE):.2f}",
     ],
 })
 styled_gt(metrics, f"Risk Metrics @ {DISCOUNT_RATE:.0%} Discount Rate")
@@ -384,8 +386,8 @@ risk_rows = []
 for r in [r / 1000 for r in range(20, 71, 5)]:
     risk_rows.append({
         "discount_rate": r,
-        "duration": fia.duration(index_rates, r),
-        "convexity": fia.convexity(index_rates, r),
+        "duration": fia.duration(index_returns, r),
+        "convexity": fia.convexity(index_returns, r),
     })
 
 risk_df = pl.DataFrame(risk_rows)
@@ -401,4 +403,4 @@ fig = plot.line_chart(
 fig.show()
 ```
 
-FIAs have relatively short durations (bounded by the accumulation term) compared to whole life or SPIA products. The maturity benefit concentrated in the final year pulls duration toward the term endpoint.
+FIAs have relatively short durations (bounded by the accumulation term) compared to whole life or SPIA products. The maturity benefit concentrated in the final year pulls duration toward the term endpoint. These sensitivities hold the credited account value fixed; a full valuation would price the annual call spread the crediting formula embeds.

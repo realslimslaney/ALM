@@ -182,9 +182,16 @@ long end sells off).
 
 ## Immunization
 
-**What it measures:**  A hedging strategy that protects a portfolio's
-surplus (assets minus liabilities) against parallel shifts in interest
-rates by matching both duration and convexity.
+**What it means:**  Redington immunization protects a portfolio's
+surplus (assets minus liabilities) against small parallel shifts in
+interest rates.  Its three conditions are equal present values, equal
+duration, and asset convexity at or above liability convexity.
+
+The toolkit's `immunize()` implements the related two-instrument
+surplus hedge: it matches DV01 (dollar duration) and dollar convexity
+with two swaps, so surplus is flat to second order for a parallel
+shift.  It does not enforce the present-value condition, so call the
+result "DV01 and convexity matched" rather than "immunized."
 
 ### Duration Matching (First Order)
 
@@ -198,8 +205,10 @@ This neutralizes the portfolio against small parallel rate shifts.
 
 ### Convexity Matching (Second Order)
 
-Duration matching alone leaves the portfolio exposed to large rate
-moves.  Adding a convexity match closes this gap:
+Duration matching alone leaves the portfolio exposed to larger rate
+moves.  Adding a convexity match removes the second-order error for
+parallel shifts (and nothing else: curve twists and spread moves are
+not hedged):
 
 $$
 C_{\$,\text{assets}} = C_{\$,\text{liabilities}}

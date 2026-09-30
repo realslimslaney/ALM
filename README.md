@@ -32,10 +32,10 @@ This toolkit is built for learning, not production. Several real-world complexit
 - **No liquidity management.** If liability claims come due before asset cash flows mature, the model does not sell assets early, borrow, or rebalance. A real insurer would fail regulatory liquidity standards under this approach.
 - **Flat yield curve.** A single `discount_rate` is used for all maturities. Real ALM uses a full term structure of interest rates.
 - **No lapses or surrenders.** Policyholders are assumed to hold policies to maturity or death. In practice, lapse rates materially affect liability cash flows and reserve requirements.
-- **No reinvestment risk modeling.** When bonds mature and proceeds are reinvested, the model reuses the original discount rate rather than simulating future rate environments.
+- **No reinvestment.** Matured asset proceeds are not reinvested; each block is a run-off projection of the assets bought at issue.
 - **Deterministic mortality.** Mortality follows the table exactly with no stochastic variation. Real portfolios experience mortality volatility, especially in small blocks.
 - **No regulatory capital.** The model does not compute or reserve for statutory or risk-based capital requirements (e.g., C-1 through C-4 risks).
-- **Simplified premium calculation.** Auto-calculated premiums use `PV(expected benefits) * (1 + profit_margin)` — a rough equivalence principle. Real pricing accounts for expenses, profit targets, lapses, and regulatory reserves.
+- **Single-premium-equivalent blocks.** A block is funded with a loaded net single premium, `PV(expected benefits) * (1 + premium_loading)`; level premiums for whole life and term are not projected. Real pricing accounts for expenses, profit targets, lapses, and regulatory reserves.
 - **No taxes.** Investment income and underwriting gain are not reduced by federal or state taxes.
 
 ## Development
