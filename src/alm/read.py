@@ -33,20 +33,32 @@ _TREASURY_SERIES: dict[str, str] = {
     "30Y": "DGS30",
 }
 
-# FRED credit-spread index series
+# FRED credit-spread index series.  The six rating-bucket ICE BofA option-adjusted
+# spreads share one methodology, so they order correctly (AAA < AA < ... < B).  The
+# broad-index and Moody's series are kept for history charts only; mixing them as
+# anchors inverted the table (Moody's Aaa-minus-10Y is a long-bond yield spread that
+# includes term premium, not an OAS).
 _CREDIT_SPREAD_SERIES: dict[str, str] = {
+    "AAA_OAS": "BAMLC0A1CAAA",
+    "AA_OAS": "BAMLC0A2CAA",
+    "A_OAS": "BAMLC0A3CA",
+    "BBB_OAS": "BAMLC0A4CBBB",
+    "BB_OAS": "BAMLH0A1HYBB",
+    "B_OAS": "BAMLH0A2HYB",
     "IG_OAS": "BAMLC0A0CM",
     "HY_OAS": "BAMLH0A0HYM2",
     "BAA10Y": "BAA10Y",
     "AAA10Y": "AAA10Y",
 }
 
-# Which FRED label anchors each rating at the 10-year point
+# Which FRED label anchors each rating's curve at the 10-year point
 _SPREAD_ANCHORS: dict[str, str] = {
-    "AAA": "AAA10Y",
-    "A": "IG_OAS",
-    "BBB": "BAA10Y",
-    "BB": "HY_OAS",
+    "AAA": "AAA_OAS",
+    "AA": "AA_OAS",
+    "A": "A_OAS",
+    "BBB": "BBB_OAS",
+    "BB": "BB_OAS",
+    "B": "B_OAS",
 }
 
 
@@ -266,6 +278,12 @@ def read_credit_spread_indices(
 
     Available series
     ----------------
+    AAA_OAS  -- ICE BofA AAA US Corporate OAS (BAMLC0A1CAAA)
+    AA_OAS   -- ICE BofA AA US Corporate OAS (BAMLC0A2CAA)
+    A_OAS    -- ICE BofA Single-A US Corporate OAS (BAMLC0A3CA)
+    BBB_OAS  -- ICE BofA BBB US Corporate OAS (BAMLC0A4CBBB)
+    BB_OAS   -- ICE BofA BB US High Yield OAS (BAMLH0A1HYBB)
+    B_OAS    -- ICE BofA Single-B US High Yield OAS (BAMLH0A2HYB)
     IG_OAS   -- ICE BofA US Corporate Investment Grade OAS (BAMLC0A0CM)
     HY_OAS   -- ICE BofA US High Yield OAS (BAMLH0A0HYM2)
     BAA10Y   -- Moody's Baa yield relative to 10-Year Treasury
@@ -279,7 +297,7 @@ def read_credit_spread_indices(
         End date (inclusive).
     series : list of str, optional
         Which series to fetch (e.g. ``["IG_OAS", "BAA10Y"]``).
-        Defaults to all four.
+        Defaults to all series.
 
     Returns
     -------
@@ -314,96 +332,80 @@ def read_credit_spread_indices(
 
 
 def update_credit_spreads() -> pl.DataFrame:
-    """Update the credit spread curve using the latest FRED market data.
+    """Update the credit spread curve from the latest FRED market data.
 
-    Fetches the most recent value for four FRED credit-spread series and
-    maps them to 10-year anchor points in the credit spread table:
+    Fetches the most recent value of the six ICE BofA rating-bucket
+    option-adjusted spread indices and uses each as the 10-year anchor of
+    that rating's tenor curve:
 
-    ==========  ================  ================================
-    Rating      FRED series       Description
-    ==========  ================  ================================
-    AAA         AAA10Y            Aaa yield minus 10-Year Treasury
-    A           BAMLC0A0CM        ICE BofA IG OAS
-    BBB         BAA10Y            Baa yield minus 10-Year Treasury
-    BB          BAMLH0A0HYM2      ICE BofA HY OAS
-    ==========  ================  ================================
+    ==========  ==============  =======================================
+    Rating      FRED series     Description
+    ==========  ==============  =======================================
+    AAA         BAMLC0A1CAAA    ICE BofA AAA US Corporate OAS
+    AA          BAMLC0A2CAA     ICE BofA AA US Corporate OAS
+    A           BAMLC0A3CA      ICE BofA Single-A US Corporate OAS
+    BBB         BAMLC0A4CBBB    ICE BofA BBB US Corporate OAS
+    BB          BAMLH0A1HYBB    ICE BofA BB US High Yield OAS
+    B           BAMLH0A2HYB     ICE BofA Single-B US High Yield OAS
+    ==========  ==============  =======================================
 
-    For each anchored rating the entire tenor curve is scaled by
-    ``new_10Y / old_10Y``.  Non-anchored ratings are interpolated:
-
-    * **AA** -- linearly interpolated between AAA and A at each tenor,
-      preserving the relative position from the original table.
-    * **B** -- extrapolated from BB using the original BB/B ratio
-      at each tenor.
+    Each rating's whole tenor curve is scaled by ``new_10Y / old_10Y``, so
+    the term-structure *shape* in the existing table is preserved and only
+    the level moves with the market.  All six series share one methodology,
+    which keeps the table ordered (AAA narrowest, B widest) at every tenor;
+    a warning is logged if the market data ever breaks that ordering.
 
     The result is rounded to whole basis points and written to
-    ``assumptions/credit_spreads.csv``.
+    ``assumptions/credit_spreads.csv``.  This is the only code path that
+    writes that file; run it through ``just refresh-spreads``.
 
     If ``FRED_API_KEY`` is not set, the existing CSV is returned unchanged.
 
     Returns
     -------
     pl.DataFrame
-        The updated credit spread table.
+        The updated credit spread table (rating, then one column per tenor,
+        in basis points).
     """
     try:
         fred = _get_fred()
     except OSError:
-        logger.warning("FRED_API_KEY not set — using existing credit spreads")
+        logger.warning("FRED_API_KEY not set; using existing credit spreads")
         return get_credit_spreads()
 
-    # Fetch the latest non-null value for each anchor series
+    # Latest non-null value for each rating's anchor series (pct points -> bps)
     anchor_bps: dict[str, float] = {}
     for rating, label in _SPREAD_ANCHORS.items():
         series_id = _CREDIT_SPREAD_SERIES[label]
         s = fred.get_series(series_id)
         latest = s.dropna().iloc[-1]
-        anchor_bps[rating] = float(latest) * 100  # pct pts -> bps
+        anchor_bps[rating] = float(latest) * 100
         logger.info("  %s (%s): %.0f bps", label, rating, anchor_bps[rating])
 
-    # Load the current table
     df = get_credit_spreads()
     tenors = [c for c in df.columns if c != "rating"]
     ratings = df["rating"].to_list()
 
-    # Helper: extract one row as {tenor: value}
     def _row_dict(r: str) -> dict[str, float]:
         row = df.filter(pl.col("rating") == r)
         return {t: float(row[t].item()) for t in tenors}
 
     old = {r: _row_dict(r) for r in ratings}
 
-    # Scale anchored ratings by new_10Y / old_10Y
     new: dict[str, dict[str, int]] = {}
-    for rating in ("AAA", "A", "BBB", "BB"):
-        old_10 = old[rating]["10"]
-        scale = anchor_bps[rating] / old_10
+    for rating in ratings:
+        scale = anchor_bps[rating] / old[rating]["10"]
         new[rating] = {t: round(old[rating][t] * scale) for t in tenors}
 
-    # Interpolate AA between AAA and A (preserve relative position)
-    new["AA"] = {}
     for t in tenors:
-        old_aaa = old["AAA"][t]
-        old_aa = old["AA"][t]
-        old_a = old["A"][t]
-        span = old_a - old_aaa
-        weight = (old_aa - old_aaa) / span if span else 0.5
-        new["AA"][t] = round(new["AAA"][t] + weight * (new["A"][t] - new["AAA"][t]))
+        column = [new[r][t] for r in ratings]
+        if column != sorted(column):
+            logger.warning("Spread ordering by rating is not monotonic at tenor %s: %s", t, column)
 
-    # Extrapolate B from BB (preserve old BB/B ratio)
-    new["B"] = {}
-    for t in tenors:
-        ratio = old["B"][t] / old["BB"][t]
-        new["B"][t] = round(new["BB"][t] * ratio)
+    result = pl.DataFrame([{"rating": r, **new[r]} for r in ratings])
 
-    # Assemble DataFrame in original rating order
-    rows = [{"rating": r, **new[r]} for r in ratings]
-    result = pl.DataFrame(rows)
-
-    # Write back
     path = _ASSUMPTIONS_DIR / "credit_spreads.csv"
     _ASSUMPTIONS_DIR.mkdir(parents=True, exist_ok=True)
     result.write_csv(path)
     logger.info("Updated credit spreads at %s", path)
-
     return result

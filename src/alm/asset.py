@@ -69,7 +69,7 @@ class Bond:
         )
 
     def present_value(self, discount_rate: float) -> float:
-        """Present value at a flat annual discount rate."""
+        """Present value at a nominal annual discount rate compounded ``frequency`` times."""
         r = discount_rate / self.frequency
         cf = self.cashflows()
         pv = sum(total / (1 + r) ** t for t, total in zip(cf["period"], cf["total"], strict=True))
@@ -180,7 +180,7 @@ class Mortgage:
         )
 
     def present_value(self, discount_rate: float) -> float:
-        """Present value at a flat annual discount rate."""
+        """Present value at a nominal annual discount rate compounded ``frequency`` times."""
         r = discount_rate / self.frequency
         cf = self.cashflows()
         pv = sum(pmt / (1 + r) ** t for t, pmt in zip(cf["period"], cf["payment"], strict=True))
@@ -226,8 +226,12 @@ class PrivateCredit:
 
     A bullet bond-like instrument where the total yield is decomposed
     into risk-free rate, credit spread, illiquidity spread, and other
-    spread.  Present value is discounted at the risk-free rate by
-    default, reflecting the illiquidity premium as excess income.
+    spread.  Present value, duration and convexity are computed at the
+    instrument's own ``total_yield`` by default, so a newly issued loan is
+    worth par.  The spread over the risk-free rate is *expected excess
+    income* (before any default losses, which this toolkit ignores), not a
+    day-one gain; discounting a risky coupon at the risk-free rate would
+    manufacture value that no market would pay for.
 
     Parameters
     ----------
@@ -297,13 +301,13 @@ class PrivateCredit:
         )
 
     def present_value(self, discount_rate: float | None = None) -> float:
-        """PV discounted at the risk-free rate (default) or a given rate.
+        """PV at the instrument's own total yield (default) or a given rate.
 
-        When discount_rate is None, uses self.risk_free_rate.
-        Discounting at the risk-free rate while earning the total yield
-        reflects the illiquidity premium as excess value.
+        With ``discount_rate=None`` the loan is valued at ``self.total_yield``
+        (nominal annual, compounded ``frequency`` times), which prices it at
+        par.  Pass a rate to revalue it, for example after a parallel shift.
         """
-        rate = discount_rate if discount_rate is not None else self.risk_free_rate
+        rate = discount_rate if discount_rate is not None else self.total_yield
         r = rate / self.frequency
         cf = self.cashflows()
         pv = sum(total / (1 + r) ** t for t, total in zip(cf["period"], cf["total"], strict=True))
@@ -312,8 +316,8 @@ class PrivateCredit:
         return pv
 
     def duration(self, discount_rate: float | None = None) -> float:
-        """Macaulay duration in years."""
-        rate = discount_rate if discount_rate is not None else self.risk_free_rate
+        """Macaulay duration in years (at the total yield by default)."""
+        rate = discount_rate if discount_rate is not None else self.total_yield
         r = rate / self.frequency
         cf = self.cashflows()
         pv = self.present_value(rate)
@@ -325,8 +329,8 @@ class PrivateCredit:
         return weighted / pv
 
     def convexity(self, discount_rate: float | None = None) -> float:
-        """Convexity (in years squared)."""
-        rate = discount_rate if discount_rate is not None else self.risk_free_rate
+        """Convexity in years squared (at the total yield by default)."""
+        rate = discount_rate if discount_rate is not None else self.total_yield
         r = rate / self.frequency
         cf = self.cashflows()
         pv = self.present_value(rate)

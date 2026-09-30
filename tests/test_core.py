@@ -106,13 +106,12 @@ class TestInterestRateSwap:
             -rcv.dv01(flat_floating, 0.04), rel=1e-10
         )
 
-    # ---- duration / convexity ---------------------------------------------
+    # ---- no Macaulay duration on a swap -----------------------------------
 
-    def test_duration_returns_float(self, swap: InterestRateSwap, flat_floating: list[float]):
-        assert isinstance(swap.duration(flat_floating, 0.04), float)
-
-    def test_convexity_returns_float(self, swap: InterestRateSwap, flat_floating: list[float]):
-        assert isinstance(swap.convexity(flat_floating, 0.04), float)
+    def test_no_macaulay_duration_on_swap(self, swap: InterestRateSwap):
+        """A swap is worth ~0 at inception, so Macaulay duration is undefined; use DV01."""
+        assert not hasattr(swap, "duration")
+        assert not hasattr(swap, "convexity")
 
     # ---- dv01 -------------------------------------------------------------
 
@@ -313,15 +312,19 @@ class TestSAA:
         assert sum(saa.weights.values()) == pytest.approx(1.0)
         assert saa.weights["private_credit"] <= 0.10
 
-    def test_spia_saa(self):
+    def test_spia_saa_tilts_to_spread_product(self):
+        """Long-duration blocks earn spread: more corporates and private credit, fewer govts."""
         saa = spia_saa()
         assert sum(saa.weights.values()) == pytest.approx(1.0)
-        assert saa.weights["govt_bonds"] >= 0.50
+        assert saa.weights["corp_bonds"] > saa.weights["govt_bonds"]
 
-    def test_term_saa(self):
+    def test_term_saa_tilts_to_government_bonds(self):
+        """Short-duration blocks hold the most government bonds for liquidity."""
         saa = term_saa()
         assert sum(saa.weights.values()) == pytest.approx(1.0)
-        assert saa.weights["mortgages"] >= 0.30
+        assert saa.weights["govt_bonds"] >= 0.50
+        assert saa.weights["govt_bonds"] > spia_saa().weights["govt_bonds"]
+        assert saa.weights["mortgages"] < spia_saa().weights["mortgages"]
 
 
 # ===================================================================

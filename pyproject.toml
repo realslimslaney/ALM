@@ -1,6 +1,6 @@
 [project]
 name = "alm"
-version = "1.3.0"
+version = "2.0.0"
 description = "Educational Asset-Liability Management toolkit: insurer liabilities, backing assets, swaps, and duration/convexity hedging"
 readme = "README.md"
 authors = [

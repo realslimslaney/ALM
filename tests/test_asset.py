@@ -199,15 +199,14 @@ class TestPrivateCredit:
         last = cf.row(-1, named=True)
         assert last["principal"] == pytest.approx(1_000.0)
 
-    def test_pv_at_risk_free_above_par(self, pc: PrivateCredit):
-        """PV discounted at risk-free exceeds par (coupon > discount)."""
-        pv = pc.present_value()
-        assert pv > 1_000.0
+    def test_default_pv_is_par(self, pc: PrivateCredit):
+        """Valued at its own total yield, a newly issued loan is worth par."""
+        assert pc.present_value() == pytest.approx(1_000.0, rel=1e-6)
+        assert pc.present_value() == pytest.approx(pc.present_value(pc.total_yield))
 
-    def test_pv_at_total_yield_equals_par(self, pc: PrivateCredit):
-        """PV at the total yield should equal par."""
-        pv = pc.present_value(pc.total_yield)
-        assert pv == pytest.approx(1_000.0, rel=1e-6)
+    def test_pv_at_risk_free_would_inflate_value(self, pc: PrivateCredit):
+        """Discounting promised coupons at the risk-free rate manufactures a day-one gain."""
+        assert pc.present_value(pc.risk_free_rate) > 1_000.0
 
     def test_pv_explicit_rate_overrides_default(self, pc: PrivateCredit):
         pv_explicit = pc.present_value(0.06)

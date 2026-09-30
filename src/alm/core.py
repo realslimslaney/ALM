@@ -73,8 +73,13 @@ def immunize(
     dd_per_unit_2: float,
     dc_per_unit_2: float,
 ) -> tuple[float, float]:
-    """Solve for notionals of two hedging instruments to close both
-    duration and convexity gaps simultaneously.
+    """Solve for notionals of two hedging instruments that close the DV01
+    and dollar-convexity gaps at once (parallel rate shifts only).
+
+    This is dollar-duration plus dollar-convexity matching, the standard
+    two-instrument surplus hedge.  It is *not* Redington immunization,
+    which also requires equal present values and asset convexity at or
+    above liability convexity.
 
     Sets up and solves the 2×2 linear system:
 
@@ -118,7 +123,7 @@ def immunize(
 
     Examples
     --------
-    >>> # 5-year and 10-year swaps closing a duration + convexity gap
+    >>> # Two instruments closing a DV01 + dollar-convexity gap (illustrative units)
     >>> n1, n2 = immunize(
     ...     dd_gap=500, dc_gap=80_000,
     ...     dd_per_unit_1=4.0, dc_per_unit_1=20.0,
@@ -188,7 +193,9 @@ def irr(
 # Rating distributions per asset class
 # ---------------------------------------------------------------------------
 
-GOVT_RATING_DIST: dict[str, float] = {"AAA": 0.70, "AA": 0.30}
+# US Treasuries: AA+ / Aa1 at all three major agencies since May 2025.  They define
+# the risk-free curve, so government bonds carry no credit spread.
+GOVT_RATING_DIST: dict[str, float] = {"AA+": 1.0}
 CORP_RATING_DIST: dict[str, float] = {"A": 0.30, "BBB": 0.50, "BB": 0.15, "B": 0.05}
 PC_RATING_DIST: dict[str, float] = {"BB": 0.40, "B": 0.60}
 
@@ -243,24 +250,34 @@ def default_saa() -> SAA:
 
 
 def spia_saa() -> SAA:
-    """SAA tuned for SPIA blocks (longer duration, more bonds)."""
+    """SAA for long-duration blocks (SPIA, whole life).
+
+    Tilts toward corporates, mortgages and private credit: a long,
+    predictable liability runoff lets the insurer earn spread and the
+    illiquidity premium over the full horizon.
+    """
     return SAA(
         weights={
-            "govt_bonds": 0.50,
-            "corp_bonds": 0.30,
-            "mortgages": 0.10,
+            "govt_bonds": 0.30,
+            "corp_bonds": 0.40,
+            "mortgages": 0.20,
             "private_credit": 0.10,
         }
     )
 
 
 def term_saa() -> SAA:
-    """SAA tuned for Term blocks (shorter duration)."""
+    """SAA for short-duration blocks (term life).
+
+    Tilts toward government bonds: claims can arrive early, so the block
+    needs liquidity and little spread duration, and long-dated mortgages
+    are a poor match for a 20-year runoff.
+    """
     return SAA(
         weights={
-            "govt_bonds": 0.30,
+            "govt_bonds": 0.50,
             "corp_bonds": 0.30,
-            "mortgages": 0.30,
+            "mortgages": 0.10,
             "private_credit": 0.10,
         }
     )
@@ -350,7 +367,11 @@ class InterestRateSwap:
         )
 
     def present_value(self, floating_rates: list[float], discount_rate: float) -> float:
-        """PV of net swap cash flows."""
+        """PV of net swap cash flows.
+
+        A swap is worth about zero at inception, so Macaulay duration is
+        undefined for it; :meth:`dv01` is the rate-sensitivity measure.
+        """
         r = discount_rate / self.frequency
         cf = self.cashflows(floating_rates)
         pv = sum(
@@ -363,28 +384,6 @@ class InterestRateSwap:
                 self.notional,
             )
         return pv
-
-    def duration(self, floating_rates: list[float], discount_rate: float) -> float:
-        """Macaulay duration in years."""
-        r = discount_rate / self.frequency
-        cf = self.cashflows(floating_rates)
-        pv = self.present_value(floating_rates, discount_rate)
-        weighted = sum(
-            (t / self.frequency) * ncf / (1 + r) ** t
-            for t, ncf in zip(cf["period"], cf["net_cashflow"], strict=True)
-        )
-        return weighted / pv
-
-    def convexity(self, floating_rates: list[float], discount_rate: float) -> float:
-        """Convexity (in years squared)."""
-        r = discount_rate / self.frequency
-        cf = self.cashflows(floating_rates)
-        pv = self.present_value(floating_rates, discount_rate)
-        conv = sum(
-            t * (t + 1) * ncf / (1 + r) ** (t + 2)
-            for t, ncf in zip(cf["period"], cf["net_cashflow"], strict=True)
-        )
-        return conv / (pv * self.frequency**2)
 
     def dv01(self, floating_rates: list[float], discount_rate: float) -> float:
         """Dollar value of one basis point (0.01 %) parallel rate shift.
@@ -409,11 +408,17 @@ class InterestRateSwap:
 
 @dataclass
 class Block:
-    """A block of business with liabilities and matching assets.
+    """A block of business with liabilities and the assets backing them.
 
     Represents a homogeneous group of insurance policies of a
     single liability type, along with the asset portfolio backing
     them according to a strategic asset allocation.
+
+    Every block is **single-premium equivalent**: the investable premium
+    is the net single premium of the expected benefits plus a loading,
+    and no level premiums are projected for whole life or term policies.
+    Backing-asset maturities are a fixed profile per liability type, not
+    solved to match the liability's DV01.
 
     Parameters
     ----------
@@ -435,17 +440,19 @@ class Block:
         Proportion male (0.0 = all female, 1.0 = all male).
     seed : int
         Random seed for reproducibility.
-    index_rates : list[float]
-        Annual index rates for FIA crediting (required if
-        liability_type is ``"FIA"``).
+    index_returns : list[float]
+        Annual equity-index price returns for FIA crediting (required
+        when liability_type is ``"FIA"``, at least ``term`` values).
     premium : float, optional
         Total investable amount (premium collected).  If ``None``
         (default), it is computed automatically as
-        ``PV(expected benefits) * (1 + profit_margin)`` when
+        ``PV(expected benefits) * (1 + premium_loading)`` when
         assets are generated.
-    profit_margin : float
-        Markup over the actuarial PV of benefits used when
-        computing premium automatically (default 0.05 = 5 %).
+    premium_loading : float
+        Loading applied to the net single premium (PV of expected
+        benefits) when computing the premium automatically (default
+        0.05 = 5 %).  It is the block's initial surplus, not a profit
+        margin in the pricing sense.
     """
 
     liability_type: str
@@ -457,9 +464,9 @@ class Block:
     n_policies: int = 500
     gender_split: float = 0.5
     seed: int = 42
-    index_rates: list[float] = field(default_factory=list)
+    index_returns: list[float] = field(default_factory=list)
     premium: float | None = None
-    profit_margin: float = 0.05
+    premium_loading: float = 0.05
 
     # Internal state (populated by generate methods)
     _policies: list = field(default_factory=list, init=False, repr=False)
@@ -474,12 +481,19 @@ class Block:
             )
         if not 0.0 <= self.gender_split <= 1.0:
             raise ValueError(f"gender_split must be in [0, 1], got {self.gender_split}")
+        if self.liability_type == "FIA" and len(self.index_returns) < 10:
+            raise ValueError(
+                "FIA blocks need index_returns with at least 10 annual returns (the FIA term); "
+                f"got {len(self.index_returns)}"
+            )
 
     def calculate_premium(self) -> float:
         """Compute the total investable premium from liability PVs.
 
-        Uses the equivalence principle:
-        ``premium = PV(expected benefits) * (1 + profit_margin)``.
+        ``premium = PV(expected benefits) * (1 + premium_loading)``: the
+        net single premium of the expected benefits (discounted at the
+        block rate, nominal annual compounded at each policy's frequency)
+        plus a loading that becomes the block's initial surplus.
 
         If policies have not been generated yet, generates them first.
         The result is stored in ``self.premium`` and returned.
@@ -499,7 +513,7 @@ class Block:
                     for t, ep in zip(cf["period"], cf["expected_payout"], strict=True)
                 )
             elif isinstance(policy, FIA):
-                cf = policy.cashflows(self.index_rates)
+                cf = policy.cashflows(self.index_returns)
                 pv_benefits += sum(
                     ncf / (1 + self.discount_rate) ** yr
                     for yr, ncf in zip(cf["year"], cf["net_cashflow"], strict=True)
@@ -513,12 +527,12 @@ class Block:
                     for t, eb in zip(cf["period"], cf["expected_benefit"], strict=True)
                 )
 
-        self.premium = pv_benefits * (1 + self.profit_margin)
+        self.premium = pv_benefits * (1 + self.premium_loading)
         logger.info(
-            "Calculated premium: $%s  (PV benefits $%s × %.1f%%)",
+            "Calculated premium: $%s  (net single premium $%s + %.1f%% loading)",
             f"{self.premium:,.0f}",
             f"{pv_benefits:,.0f}",
-            (1 + self.profit_margin) * 100,
+            self.premium_loading * 100,
         )
         return self.premium
 
@@ -527,7 +541,9 @@ class Block:
         ages and genders.
 
         Each policy gets a pro-rata share of the total liability
-        amount.  Uses stdlib ``random.Random`` for reproducibility.
+        amount.  WL and Term policies are created with no level premium
+        (single-premium equivalent; see the class docstring).  Uses
+        stdlib ``random.Random`` for reproducibility.
         """
         from alm.liability import FIA, SPIA, WL, Term, qx_from_table
 
@@ -554,14 +570,14 @@ class Block:
             elif self.liability_type == "WL":
                 policy = WL(
                     face_value=per_policy,
-                    annual_premium=per_policy * 0.015,
+                    annual_premium=0.0,
                     qx=qx,
                     age=age,
                 )
             elif self.liability_type == "Term":
                 policy = Term(
                     face_value=per_policy,
-                    annual_premium=per_policy * 0.005,
+                    annual_premium=0.0,
                     term=20,
                     qx=qx,
                     age=age,
@@ -581,8 +597,8 @@ class Block:
     def generate_assets(self) -> list:
         """Create asset positions according to SAA weights.
 
-        Bond maturities are chosen to roughly match the liability
-        block's general duration profile.  The total amount allocated
+        Bond maturities follow a fixed profile per liability type that
+        roughly reflects the block's horizon.  The total amount allocated
         is based on ``self.premium`` (the investable amount).  If
         premium has not been set or calculated, it is computed
         automatically via :meth:`calculate_premium`.
@@ -609,19 +625,18 @@ class Block:
         maturities = duration_profiles[self.liability_type]
         assets: list = []
 
-        # Government bonds — split by rating and maturity
+        # Government bonds: the risk-free benchmark, so no credit spread
         if alloc.get("govt_bonds", 0) > 0:
             amt = alloc["govt_bonds"]
             for rating, weight in GOVT_RATING_DIST.items():
                 for mat in maturities:
-                    spread = get_spread(rating, mat)
                     assets.append(
                         Bond(
                             face_value=amt * weight / len(maturities),
-                            coupon_rate=self.discount_rate + spread,
+                            coupon_rate=self.discount_rate,
                             maturity=mat,
                             rating=rating,
-                            credit_spread=spread,
+                            credit_spread=0.0,
                         )
                     )
 
@@ -697,7 +712,7 @@ class Block:
         all_rows: list[pl.DataFrame] = []
         for policy in self._policies:
             if isinstance(policy, FIA):
-                cf = policy.cashflows(self.index_rates)
+                cf = policy.cashflows(self.index_returns)
                 cf = cf.select(
                     "year",
                     pl.col("net_cashflow").alias("cashflow"),
@@ -794,94 +809,3 @@ class Block:
             yformat="$",
             barmode="group",
         )
-
-    def reinvest(self, year: int) -> list:
-        """Reinvest proceeds from matured bonds at the given year
-        according to SAA weights.
-
-        Parameters
-        ----------
-        year : int
-            The year at which reinvestment occurs.
-
-        Returns
-        -------
-        list
-            New asset instruments created from reinvestment.
-        """
-        from alm.asset import Bond, Mortgage, PrivateCredit
-        from alm.read import get_spread
-
-        matured_proceeds = 0.0
-        remaining: list = []
-
-        for inst in self._assets:
-            if isinstance(inst, (Bond, PrivateCredit)):
-                if inst.maturity < year:
-                    matured_proceeds += inst.face_value
-                else:
-                    remaining.append(inst)
-            else:
-                remaining.append(inst)
-
-        if matured_proceeds <= 0:
-            return []
-
-        alloc = self.saa.allocation(matured_proceeds)
-        new_assets: list = []
-
-        if alloc.get("govt_bonds", 0) > 0:
-            amt = alloc["govt_bonds"]
-            for rating, weight in GOVT_RATING_DIST.items():
-                spread = get_spread(rating, 5)
-                new_assets.append(
-                    Bond(
-                        face_value=amt * weight,
-                        coupon_rate=self.discount_rate + spread,
-                        maturity=5,
-                        rating=rating,
-                        credit_spread=spread,
-                    )
-                )
-
-        if alloc.get("corp_bonds", 0) > 0:
-            amt = alloc["corp_bonds"]
-            for rating, weight in CORP_RATING_DIST.items():
-                spread = get_spread(rating, 5)
-                new_assets.append(
-                    Bond(
-                        face_value=amt * weight,
-                        coupon_rate=self.discount_rate + spread,
-                        maturity=5,
-                        rating=rating,
-                        credit_spread=spread,
-                    )
-                )
-
-        if alloc.get("mortgages", 0) > 0:
-            new_assets.append(
-                Mortgage(
-                    principal=alloc["mortgages"],
-                    annual_rate=self.discount_rate + get_spread("A", 15),
-                    term=15,
-                )
-            )
-
-        if alloc.get("private_credit", 0) > 0:
-            amt = alloc["private_credit"]
-            for rating, weight in PC_RATING_DIST.items():
-                spread = get_spread(rating, 5)
-                new_assets.append(
-                    PrivateCredit(
-                        face_value=amt * weight,
-                        maturity=5,
-                        risk_free_rate=self.discount_rate,
-                        credit_spread=spread,
-                        illiquidity_spread=0.020,
-                        other_spread=0.005,
-                        rating=rating,
-                    )
-                )
-
-        self._assets = remaining + new_assets
-        return new_assets
